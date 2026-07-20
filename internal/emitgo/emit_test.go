@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/verba-lang/verba/internal/ast"
+	"github.com/verba-lang/verba/internal/check"
 	verbaParser "github.com/verba-lang/verba/internal/parser"
 )
 
@@ -184,6 +185,99 @@ end
 	for _, unused := range []string{`"crypto/rand"`, `"encoding/json"`, `"html"`, `"regexp"`, `"strings"`, `"time"`, "type Result[", "renderTemplate", "decodeJSON", "parseUUID"} {
 		if strings.Contains(text, unused) {
 			t.Fatalf("minimal generated source unexpectedly contains %q:\n%s", unused, text)
+		}
+	}
+}
+
+func TestEmitTypedPostgresRuntimeAndTransaction(t *testing.T) {
+	source := []byte(`module example
+enum app_error
+begin
+    case database_failure
+end
+record user
+begin
+    field id uuid
+    field balance decimal
+end
+embed sql find_user until end_find
+SELECT id, balance FROM users WHERE id = :id;
+end_find
+embed sql rename_user until end_rename
+UPDATE users SET name = :name WHERE id = :id;
+end_rename
+function load
+input id uuid
+output result user app_error
+begin
+    return call sql_one find_user
+    begin
+        with id id
+    end
+end
+route rename
+method post
+path /users/{id}
+begin
+    transaction database
+    begin
+        try call sql_exec rename_user
+        begin
+            with name text updated
+            with id id
+        end
+    end
+    respond empty 204
+end
+`)
+	file, parseDiagnostics := verbaParser.Parse("postgres.vrb", source)
+	if len(parseDiagnostics) != 0 {
+		t.Fatalf("parse diagnostics: %#v", parseDiagnostics)
+	}
+	findUser := file.Decls[2].(*ast.Embed)
+	findUser.SQL = &ast.SQLQuery{
+		Statement:  "select",
+		Text:       "SELECT id, balance FROM users WHERE id = $1;",
+		Parameters: []ast.SQLParameter{{Name: "id", Type: ast.Type{Name: "uuid"}}},
+		Columns: []ast.SQLColumn{
+			{Name: "id", Type: ast.Type{Name: "uuid"}},
+			{Name: "balance", Type: ast.Type{Name: "decimal"}},
+		},
+	}
+	renameUser := file.Decls[3].(*ast.Embed)
+	renameUser.SQL = &ast.SQLQuery{
+		Statement: "update",
+		Text:      "UPDATE users SET name = $1 WHERE id = $2;",
+		Parameters: []ast.SQLParameter{
+			{Name: "name", Type: ast.Type{Name: "string"}},
+			{Name: "id", Type: ast.Type{Name: "string"}},
+		},
+	}
+	if diagnostics := check.Files([]*ast.File{file}); len(diagnostics) != 0 {
+		t.Fatalf("check diagnostics: %#v", diagnostics)
+	}
+	generated, diagnostics := Files([]*ast.File{file})
+	if len(diagnostics) != 0 {
+		t.Fatalf("emit diagnostics: %#v", diagnostics)
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "main.go", generated, parser.AllErrors); err != nil {
+		t.Fatalf("generated Go is invalid: %v\n%s", err, generated)
+	}
+	text := string(generated)
+	for _, expected := range []string{
+		`_ "github.com/jackc/pgx/v5/stdlib"`,
+		`sql.Open("pgx", databaseURL)`,
+		`func scanFindUserRow(scanner sqlScanner) (User, error)`,
+		`mapSQLError(sqlOne[User](verbaSQLExecutor, verbaSQLContext, find_user, scanFindUserRow, id), AppErrorDatabaseFailure)`,
+		`database.BeginTx(verbaSQLContext, nil)`,
+		`defer verbaTemp`,
+		`.Rollback()`,
+		`.Commit()`,
+		`func (value *Decimal) Scan(input any) error`,
+		`func (value Decimal) Value() (driver.Value, error)`,
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("generated source does not contain %q:\n%s", expected, text)
 		}
 	}
 }

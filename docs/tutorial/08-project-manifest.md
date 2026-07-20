@@ -43,9 +43,7 @@ dialect = "postgres"
 schema = "schema.sql"
 ```
 
-`schema` 必须是项目内存在的相对文件，不能使用绝对路径或 `..` 逃出项目目录。这为后续 SQL 行类型推导提供确定、可审查的输入。
-
-当前编译器已经验证数据库配置和 schema 路径，但 SQL 驱动及查询执行仍在后续运行时里实现。
+`schema` 必须是项目内存在的相对 SQL 文件，不能使用绝对路径、`..` 或解析到项目外的符号链接。编译器会解析其中的 `CREATE TABLE`，用列类型和 nullability 检查 SQL 参数与结果行；构建产物通过 `VERBA_DATABASE_URL` 连接 PostgreSQL。
 
 ## 依赖声明
 
@@ -75,4 +73,4 @@ verba.toml:1:1: error VRB0907: database schema must stay inside the project dire
   hint: use a relative path without escaping the project root
 ```
 
-至此，你已经走完从安装、语言基础、HTTP 与语法岛，到工具链和项目组织的完整入门路线。继续阅读仓库根目录的 `design.md` 可以了解 Verba 的长期语言设计。
+下一章：[数值类型与精确小数](09-numeric-types.md)。完成后继续学习 [PostgreSQL：类型化查询与事务](10-postgresql.md)。

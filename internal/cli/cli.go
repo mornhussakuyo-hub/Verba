@@ -321,6 +321,14 @@ func (c *CLI) compileGo(source []byte, target string) error {
 	if err := os.WriteFile(mainPath, source, 0o644); err != nil {
 		return err
 	}
+	module := []byte("module verba.generated\n\ngo 1.24\n")
+	usesPostgres := bytes.Contains(source, []byte("github.com/jackc/pgx/v5/stdlib"))
+	if usesPostgres {
+		module = append(module, []byte("\nrequire github.com/jackc/pgx/v5 v5.7.6\n")...)
+	}
+	if err := os.WriteFile(filepath.Join(temp, "go.mod"), module, 0o644); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
@@ -328,7 +336,16 @@ func (c *CLI) compileGo(source []byte, target string) error {
 	if err != nil {
 		return err
 	}
-	command := exec.Command("go", "build", "-trimpath", "-buildvcs=false", "-ldflags=-s -w", "-o", absolute, mainPath)
+	if usesPostgres {
+		command := exec.Command("go", "mod", "tidy")
+		command.Dir = temp
+		command.Stdout, command.Stderr = c.Stdout, c.Stderr
+		if err := command.Run(); err != nil {
+			return fmt.Errorf("Go backend dependency resolution failed: %w", err)
+		}
+	}
+	command := exec.Command("go", "build", "-trimpath", "-buildvcs=false", "-ldflags=-s -w", "-o", absolute, ".")
+	command.Dir = temp
 	command.Stdout, command.Stderr = c.Stdout, c.Stderr
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("Go backend failed: %w", err)

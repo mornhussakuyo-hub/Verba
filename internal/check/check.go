@@ -60,14 +60,15 @@ var builtins = map[string]builtin{
 }
 
 type Checker struct {
-	files         []*ast.File
-	decls         map[string]ast.Decl
-	functions     map[string]*ast.Function
-	records       map[string]*ast.Record
-	embeds        map[string]*ast.Embed
-	enumCases     map[string]ast.Type
-	routeBoundary bool
-	diagnostics   []diagnostic.Diagnostic
+	files            []*ast.File
+	decls            map[string]ast.Decl
+	functions        map[string]*ast.Function
+	records          map[string]*ast.Record
+	embeds           map[string]*ast.Embed
+	enumCases        map[string]ast.Type
+	routeBoundary    bool
+	transactionDepth int
+	diagnostics      []diagnostic.Diagnostic
 }
 
 func Files(files []*ast.File) []diagnostic.Diagnostic {
@@ -103,6 +104,10 @@ func (c *Checker) collect() {
 				c.embeds[value.Name] = value
 			case *ast.Enum:
 				for _, item := range value.Cases {
+					if previous, exists := c.enumCases[item.Name]; exists {
+						c.error(item.Pos, "VRB1112", fmt.Sprintf("enum case %s is already declared by %s", item.Name, previous.Name), "enum case names are module-wide and must be unique")
+						continue
+					}
 					c.enumCases[item.Name] = ast.Type{Name: value.Name}
 				}
 			}
@@ -275,6 +280,9 @@ func (c *Checker) validateStatements(statements []ast.Stmt, local scope, inRoute
 			}
 			c.validateExpr(&value.Value, local, expected)
 		case *ast.ReturnStmt:
+			if c.transactionDepth > 0 {
+				c.error(value.Pos, "SQL2112", "return cannot leave a transaction block", "return after the transaction block so commit and rollback remain explicit")
+			}
 			if expectedReturn == nil {
 				if value.Value != nil {
 					c.validateExpr(value.Value, local, nil)
@@ -289,6 +297,9 @@ func (c *Checker) validateStatements(statements []ast.Stmt, local scope, inRoute
 			actual := c.validateExpr(value.Value, local, expectedReturn)
 			c.requireAssignable(value.Pos, *expectedReturn, actual, "returned value")
 		case *ast.RespondStmt:
+			if c.transactionDepth > 0 {
+				c.error(value.Pos, "SQL2112", "respond cannot leave a transaction block", "respond after the transaction block so commit and rollback remain explicit")
+			}
 			if !inRoute {
 				c.error(value.Pos, "VRB1304", "respond can only be used inside a route", "use return inside a function")
 			}
@@ -352,7 +363,20 @@ func (c *Checker) validateStatements(statements []ast.Stmt, local scope, inRoute
 			}
 			c.validateStatements(value.Else, cloneScope(local), inRoute, expectedReturn)
 		case *ast.TransactionStmt:
+			if value.Resource != "database" {
+				c.error(value.Pos, "SQL2110", fmt.Sprintf("unknown transaction resource %s", value.Resource), "use transaction database for the configured PostgreSQL connection")
+			}
+			if c.transactionDepth > 0 {
+				c.error(value.Pos, "SQL2111", "nested transactions are not supported", "keep one transaction boundary and call SQL operations inside it")
+			}
+			if expectedReturn != nil && expectedReturn.Name == "result" && len(expectedReturn.Args) == 2 && expectedReturn.Args[1].Name != "string" {
+				if databaseFailure, exists := c.enumCases["database_failure"]; !exists || !sameType(databaseFailure, expectedReturn.Args[1]) {
+					c.error(value.Pos, "SQL2113", fmt.Sprintf("cannot map transaction failures to %s", expectedReturn.Args[1].String()), "add a database_failure case to the enclosing error enum or use string as the result error type")
+				}
+			}
+			c.transactionDepth++
 			c.validateStatements(value.Body, cloneScope(local), inRoute, expectedReturn)
+			c.transactionDepth--
 		}
 	}
 }
@@ -678,34 +702,152 @@ func (c *Checker) validateRenderBuiltin(expr *ast.Expr, local scope) ast.Type {
 }
 
 func (c *Checker) validateSQLBuiltin(expr *ast.Expr, local scope, expected *ast.Type) ast.Type {
+	var embed *ast.Embed
 	if len(expr.Args) > 0 {
 		resource := &expr.Args[0]
-		if resource.Kind != ast.ExprAtom || c.embeds[resource.Value] == nil || c.embeds[resource.Value].Kind != "sql" {
+		embed = c.embeds[resource.Value]
+		if resource.Kind != ast.ExprAtom || embed == nil || embed.Kind != "sql" {
 			c.validateExpr(resource, local, nil)
+			c.error(expr.Pos, "SQL2101", fmt.Sprintf("%s is not a SQL island", resource.Value), "pass the name of an embed sql resource")
+			embed = nil
 		}
 	}
 	for index := 1; index < len(expr.Args); index++ {
 		c.validateExpr(&expr.Args[index], local, nil)
 	}
-	for index := range expr.NamedArgs {
-		c.validateExpr(&expr.NamedArgs[index].Value, local, nil)
-	}
-	c.validateSQLCall(expr)
+	c.validateSQLBindings(expr, embed, local)
 	rowType := unknownType
+	if embed != nil && embed.SQL != nil && len(embed.SQL.Columns) > 0 {
+		rowType = c.resolveSQLRowType(embed)
+	}
 	var valueType ast.Type
 	switch expr.Value {
 	case "sql_exec":
+		if embed != nil && embed.SQL != nil && len(embed.SQL.Columns) > 0 {
+			c.error(expr.Pos, "SQL2108", fmt.Sprintf("sql_exec cannot discard rows returned by %s", embed.Name), "use sql_one, sql_optional, or sql_many for a query with result columns")
+		}
 		valueType = intType
 	case "sql_one":
+		c.requireSQLRows(expr, embed)
 		valueType = rowType
 	case "sql_optional":
+		c.requireSQLRows(expr, embed)
 		valueType = ast.Type{Name: "optional", Args: []ast.Type{rowType}}
 	case "sql_many":
+		c.requireSQLRows(expr, embed)
 		valueType = ast.Type{Name: "list", Args: []ast.Type{rowType}}
 	default:
 		return unknownType
 	}
-	return c.applyTry(expr, ast.Type{Name: "result", Args: []ast.Type{valueType, stringType}}, expected)
+	errorType := stringType
+	if expected != nil && expected.Name == "result" && len(expected.Args) == 2 && !sameType(expected.Args[1], stringType) {
+		if databaseFailure, exists := c.enumCases["database_failure"]; exists && sameType(databaseFailure, expected.Args[1]) {
+			errorType = expected.Args[1]
+		} else {
+			c.error(expr.Pos, "SQL2113", fmt.Sprintf("cannot map database failures to %s", expected.Args[1].String()), "add a database_failure case to the enclosing error enum or use string as the result error type")
+		}
+	}
+	resultType := ast.Type{Name: "result", Args: []ast.Type{valueType, errorType}}
+	expr.CallResultType = resultType
+	return c.applyTry(expr, resultType, expected)
+}
+
+func (c *Checker) validateSQLBindings(expr *ast.Expr, embed *ast.Embed, local scope) {
+	expected := map[string]ast.Type{}
+	if embed != nil && embed.SQL != nil {
+		for _, parameter := range embed.SQL.Parameters {
+			expected[parameter.Name] = parameter.Type
+		}
+	} else if embed != nil {
+		for _, match := range sqlParameter.FindAllString(embed.Raw, -1) {
+			expected[strings.TrimPrefix(match, ":")] = unknownType
+		}
+	}
+	actual := map[string]bool{}
+	for index := range expr.NamedArgs {
+		arg := &expr.NamedArgs[index]
+		parameterType, exists := expected[arg.Name]
+		var expectedType *ast.Type
+		if exists && !isUnknown(parameterType) {
+			expectedType = &parameterType
+		}
+		valueType := c.validateExpr(&arg.Value, local, expectedType)
+		if expectedType != nil {
+			if valueType.Name != "optional" || len(valueType.Args) != 1 || !sameType(parameterType, valueType.Args[0]) {
+				c.requireAssignable(arg.Pos, parameterType, valueType, fmt.Sprintf("SQL binding %s", arg.Name))
+			}
+		}
+		if actual[arg.Name] {
+			c.error(arg.Pos, "SQL2102", fmt.Sprintf("duplicate SQL binding %s", arg.Name), "bind each SQL parameter once")
+		}
+		actual[arg.Name] = true
+		if !exists {
+			resource := "SQL island"
+			if embed != nil {
+				resource = "SQL island " + embed.Name
+			}
+			c.error(arg.Pos, "SQL2103", fmt.Sprintf("binding %s is not used by %s", arg.Name, resource), "remove the extra binding or update the SQL parameter")
+		}
+	}
+	for name := range expected {
+		if !actual[name] {
+			resource := "SQL island"
+			if embed != nil {
+				resource = "SQL island " + embed.Name
+			}
+			c.error(expr.Pos, "SQL2107", fmt.Sprintf("parameter :%s is declared by %s but is not bound", name, resource), "add a with binding in the call argument block")
+		}
+	}
+}
+
+func (c *Checker) requireSQLRows(expr *ast.Expr, embed *ast.Embed) {
+	if embed != nil && embed.SQL != nil && len(embed.SQL.Columns) == 0 {
+		c.error(expr.Pos, "SQL2109", fmt.Sprintf("SQL island %s does not return rows", embed.Name), "add RETURNING columns or use sql_exec")
+	}
+}
+
+func (c *Checker) resolveSQLRowType(embed *ast.Embed) ast.Type {
+	if embed.SQL.RowType.Name != "" {
+		return embed.SQL.RowType
+	}
+	for _, file := range c.files {
+		for _, decl := range file.Decls {
+			record, ok := decl.(*ast.Record)
+			if ok && sqlColumnsMatchRecord(embed.SQL.Columns, record) {
+				embed.SQL.RowType = ast.Type{Name: record.Name}
+				return embed.SQL.RowType
+			}
+		}
+	}
+	base := "sql_" + embed.Name + "_row"
+	name := base
+	for suffix := 2; c.decls[name] != nil || c.records[name] != nil; suffix++ {
+		name = fmt.Sprintf("%s_%d", base, suffix)
+	}
+	fields := make([]ast.Field, 0, len(embed.SQL.Columns))
+	for _, column := range embed.SQL.Columns {
+		fields = append(fields, ast.Field{Name: column.Name, Type: column.Type, Pos: embed.Pos})
+	}
+	c.records[name] = &ast.Record{Name: name, Fields: fields, Pos: embed.Pos}
+	embed.SQL.RowType = ast.Type{Name: name}
+	return embed.SQL.RowType
+}
+
+func sqlColumnsMatchRecord(columns []ast.SQLColumn, record *ast.Record) bool {
+	if len(columns) != len(record.Fields) {
+		return false
+	}
+	fields := map[string]ast.Type{}
+	for _, field := range record.Fields {
+		fields[field.Name] = field.Type
+	}
+	for _, column := range columns {
+		fieldType, exists := fields[column.Name]
+		if !exists || !sameType(fieldType, column.Type) {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Checker) resolveTypeArgument(expr ast.Expr) ast.Type {
@@ -876,37 +1018,6 @@ func (c *Checker) isMatchable(value ast.Type) bool {
 		return false
 	default:
 		return true
-	}
-}
-
-func (c *Checker) validateSQLCall(expr *ast.Expr) {
-	if len(expr.Args) == 0 {
-		return
-	}
-	resource := expr.Args[0].Value
-	embed := c.embeds[resource]
-	if embed == nil || embed.Kind != "sql" {
-		c.error(expr.Pos, "SQL2101", fmt.Sprintf("%s is not a SQL island", resource), "pass the name of an embed sql resource")
-		return
-	}
-	expected := map[string]bool{}
-	for _, match := range sqlParameter.FindAllString(embed.Raw, -1) {
-		expected[strings.TrimPrefix(match, ":")] = true
-	}
-	actual := map[string]bool{}
-	for _, arg := range expr.NamedArgs {
-		if actual[arg.Name] {
-			c.error(arg.Pos, "SQL2102", fmt.Sprintf("duplicate SQL binding %s", arg.Name), "bind each SQL parameter once")
-		}
-		actual[arg.Name] = true
-		if !expected[arg.Name] {
-			c.error(arg.Pos, "SQL2103", fmt.Sprintf("binding %s is not used by SQL island %s", arg.Name, resource), "remove the extra binding or update the SQL parameter")
-		}
-	}
-	for name := range expected {
-		if !actual[name] {
-			c.error(expr.Pos, "SQL2107", fmt.Sprintf("parameter :%s is declared by SQL island %s but is not bound", name, resource), "add a with binding in the call argument block")
-		}
 	}
 }
 

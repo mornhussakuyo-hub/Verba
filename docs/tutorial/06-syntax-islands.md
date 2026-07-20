@@ -65,8 +65,8 @@ SELECT id, name FROM users WHERE id = :id;
 end_find_user
 ```
 
-所有动态值必须通过命名参数块绑定。编译器会检查缺失、多余和重复绑定，禁止通过字符串拼接绕过边界。
+所有动态值必须通过命名参数块绑定。编译器会结合 `verba.toml` 配置的 PostgreSQL schema 快照，检查缺失、多余、重复和类型不兼容的绑定，并推导直接单表查询的结果行。
 
-当前分支已经完成 SQL 岛与绑定的前端检查；数据库驱动、schema 快照、结果行类型和事务代码生成仍在实现状态，详见 `docs/implementation-status.md`。
+Go 后端使用 `database/sql` 与固定版本 pgx 生成 `sql_exec`、`sql_one`、`sql_optional`、`sql_many` 和事务代码。完整用法见第十章 [PostgreSQL：类型化查询与事务](10-postgresql.md)。
 
 下一章：[工具链与排错](07-tooling.md)。

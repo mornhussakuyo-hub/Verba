@@ -16,6 +16,7 @@ import (
 	"github.com/verba-lang/verba/internal/parser"
 	"github.com/verba-lang/verba/internal/resolve"
 	"github.com/verba-lang/verba/internal/source"
+	"github.com/verba-lang/verba/internal/sqlpostgres"
 )
 
 type Program struct {
@@ -152,10 +153,93 @@ func Load(inputs []string) (*Program, []diagnostic.Diagnostic, error) {
 		var resolveDiagnostics []diagnostic.Diagnostic
 		program.Resolved, resolveDiagnostics = resolve.Files(program.Files, options)
 		diagnostics = append(diagnostics, resolveDiagnostics...)
+		var schema *sqlpostgres.Schema
+		if program.Manifest != nil && program.Manifest.Database != nil && program.Manifest.Database.SchemaPath != "" {
+			var schemaDiagnostics []diagnostic.Diagnostic
+			schema, schemaDiagnostics, err = sqlpostgres.Load(program.Manifest.Database.SchemaPath)
+			if err != nil {
+				return nil, nil, err
+			}
+			diagnostics = append(diagnostics, schemaDiagnostics...)
+			if diagnostic.HasErrors(schemaDiagnostics) {
+				schema = nil
+			}
+		}
+		for _, file := range program.Files {
+			for _, decl := range file.Decls {
+				embed, ok := decl.(*ast.Embed)
+				if !ok || embed.Kind != "sql" {
+					continue
+				}
+				if program.Manifest == nil || program.Manifest.Database == nil {
+					diagnostics = append(diagnostics, diagnostic.Diagnostic{
+						Severity: diagnostic.Error,
+						Code:     "SQL2408",
+						File:     embed.Pos.File,
+						Line:     embed.Pos.Line,
+						Column:   embed.Pos.Column,
+						Message:  fmt.Sprintf("SQL island %s requires a project database configuration", embed.Name),
+						Hint:     "add [database] with dialect = \"postgres\" and a schema snapshot to verba.toml",
+					})
+					continue
+				}
+				if schema != nil {
+					diagnostics = append(diagnostics, sqlpostgres.Analyze(embed, schema)...)
+				}
+			}
+			if program.Manifest == nil || program.Manifest.Database == nil {
+				for _, position := range transactionPositions(file) {
+					diagnostics = append(diagnostics, diagnostic.Diagnostic{
+						Severity: diagnostic.Error,
+						Code:     "SQL2408",
+						File:     position.File,
+						Line:     position.Line,
+						Column:   position.Column,
+						Message:  "transaction database requires a project database configuration",
+						Hint:     "add [database] with dialect = \"postgres\" and a schema snapshot to verba.toml",
+					})
+				}
+			}
+		}
 		diagnostics = append(diagnostics, check.Files(program.Files)...)
 	}
 	diagnostic.Sort(diagnostics)
 	return program, diagnostics, nil
+}
+
+func transactionPositions(file *ast.File) []ast.Position {
+	var positions []ast.Position
+	var walk func([]ast.Stmt)
+	walk = func(statements []ast.Stmt) {
+		for _, statement := range statements {
+			switch value := statement.(type) {
+			case *ast.IfStmt:
+				walk(value.Then)
+				walk(value.Else)
+			case *ast.ForStmt:
+				walk(value.Body)
+			case *ast.WhileStmt:
+				walk(value.Body)
+			case *ast.MatchStmt:
+				for _, matchCase := range value.Cases {
+					walk(matchCase.Body)
+				}
+				walk(value.Else)
+			case *ast.TransactionStmt:
+				positions = append(positions, value.Pos)
+				walk(value.Body)
+			}
+		}
+	}
+	for _, decl := range file.Decls {
+		switch value := decl.(type) {
+		case *ast.Function:
+			walk(value.Body)
+		case *ast.Route:
+			walk(value.Body)
+		}
+	}
+	return positions
 }
 
 func Emit(program *Program) ([]byte, []diagnostic.Diagnostic) {

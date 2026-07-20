@@ -32,6 +32,136 @@ end
 	}
 }
 
+func TestSQLUsesSchemaTypesAndDeclaredRows(t *testing.T) {
+	source := []byte(`module example
+record user
+begin
+    field id uuid
+    field name string
+end
+embed sql find_user until end_sql
+SELECT id, name FROM users WHERE id = :id;
+end_sql
+function load
+input id string
+begin
+    let result to be call sql_optional find_user
+    begin
+        with id id
+    end
+end
+`)
+	file, parseDiagnostics := parser.Parse("sql.vrb", source)
+	if len(parseDiagnostics) != 0 {
+		t.Fatalf("parse diagnostics: %#v", parseDiagnostics)
+	}
+	embed := file.Decls[1].(*ast.Embed)
+	embed.SQL = &ast.SQLQuery{
+		Parameters: []ast.SQLParameter{{Name: "id", Type: ast.Type{Name: "uuid"}}},
+		Columns: []ast.SQLColumn{
+			{Name: "id", Type: ast.Type{Name: "uuid"}},
+			{Name: "name", Type: ast.Type{Name: "string"}},
+		},
+	}
+	diagnostics := Files([]*ast.File{file})
+	if !hasCode(diagnostics, "VRB1422") {
+		t.Fatalf("expected typed binding diagnostic, got %#v", diagnostics)
+	}
+	function := file.Decls[2].(*ast.Function)
+	call := function.Body[0].(*ast.LetStmt).Value
+	if call.ResolvedType.String() != "result optional user string" || embed.SQL.RowType.Name != "user" {
+		t.Fatalf("resolved SQL type = %s, row = %s", call.ResolvedType.String(), embed.SQL.RowType.String())
+	}
+}
+
+func TestSQLSynthesizesRowAndValidatesCallShape(t *testing.T) {
+	source := []byte(`module example
+embed sql list_users until end_sql
+SELECT id, name FROM users;
+end_sql
+function load
+begin
+    let rows to be call sql_many list_users
+end
+`)
+	file, parseDiagnostics := parser.Parse("sql.vrb", source)
+	if len(parseDiagnostics) != 0 {
+		t.Fatalf("parse diagnostics: %#v", parseDiagnostics)
+	}
+	embed := file.Decls[0].(*ast.Embed)
+	embed.SQL = &ast.SQLQuery{Columns: []ast.SQLColumn{
+		{Name: "id", Type: ast.Type{Name: "uuid"}},
+		{Name: "name", Type: ast.Type{Name: "string"}},
+	}}
+	if diagnostics := Files([]*ast.File{file}); len(diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", diagnostics)
+	}
+	function := file.Decls[1].(*ast.Function)
+	call := function.Body[0].(*ast.LetStmt).Value
+	if call.ResolvedType.String() != "result list sql_list_users_row string" {
+		t.Fatalf("resolved SQL type = %s", call.ResolvedType.String())
+	}
+}
+
+func TestSQLMapsContextualDatabaseError(t *testing.T) {
+	source := []byte(`module example
+enum app_error
+begin
+    case database_failure
+end
+record user
+begin
+    field id uuid
+end
+embed sql find_user until end_sql
+SELECT id FROM users;
+end_sql
+function load
+output result user app_error
+begin
+    let row to be try call sql_one find_user
+    return call ok row
+end
+`)
+	file, parseDiagnostics := parser.Parse("sql.vrb", source)
+	if len(parseDiagnostics) != 0 {
+		t.Fatalf("parse diagnostics: %#v", parseDiagnostics)
+	}
+	embed := file.Decls[2].(*ast.Embed)
+	embed.SQL = &ast.SQLQuery{Columns: []ast.SQLColumn{{Name: "id", Type: ast.Type{Name: "uuid"}}}}
+	if diagnostics := Files([]*ast.File{file}); len(diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", diagnostics)
+	}
+	function := file.Decls[3].(*ast.Function)
+	call := function.Body[0].(*ast.LetStmt).Value
+	if call.CallResultType.String() != "result user app_error" || call.ResolvedType.String() != "user" {
+		t.Fatalf("SQL call types = %s, %s", call.CallResultType.String(), call.ResolvedType.String())
+	}
+}
+
+func TestTransactionRestrictions(t *testing.T) {
+	source := []byte(`module example
+function invalid
+output string
+begin
+    transaction cache
+    begin
+        transaction database
+        begin
+            return text invalid
+        end
+    end
+    return text unreachable
+end
+`)
+	diagnostics := checkSource(t, source)
+	for _, code := range []string{"SQL2110", "SQL2111", "SQL2112"} {
+		if !hasCode(diagnostics, code) {
+			t.Errorf("expected %s, got %#v", code, diagnostics)
+		}
+	}
+}
+
 func TestInvalidJSON(t *testing.T) {
 	source := []byte("module example\nembed json value until done\n{bad}\ndone\n")
 	file, _ := parser.Parse("json.vrb", source)

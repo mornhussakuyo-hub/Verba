@@ -22,7 +22,7 @@ func TestLoadValidManifest(t *testing.T) {
 	if err != nil || len(diagnostics) != 0 {
 		t.Fatalf("Load() = %#v, %#v, %v", value, diagnostics, err)
 	}
-	if value.Name != "users" || value.Database == nil || value.Dependencies["verba_http"] != "0.1" {
+	if value.Name != "users" || value.Database == nil || value.Database.SchemaPath != filepath.Join(directory, "schema.sql") || value.Dependencies["verba_http"] != "0.1" {
 		t.Fatalf("Load() value = %#v", value)
 	}
 }

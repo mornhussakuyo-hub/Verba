@@ -19,28 +19,32 @@ type emitter struct {
 	diagnostics []diagnostic.Diagnostic
 	enumCases   map[string]string
 	functions   map[string]*ast.Function
+	records     map[string]*ast.Record
 	embeds      map[string]*ast.Embed
 	features    featureSet
 	temp        int
+	transaction string
 }
 
 type featureSet struct {
-	json       bool
-	jsonDecode bool
-	regex      bool
-	template   bool
-	html       bool
-	strings    bool
-	time       bool
-	randomUUID bool
-	parseUUID  bool
-	result     bool
-	decimal    bool
-	floatMath  bool
+	json        bool
+	jsonDecode  bool
+	regex       bool
+	template    bool
+	html        bool
+	strings     bool
+	time        bool
+	randomUUID  bool
+	parseUUID   bool
+	result      bool
+	decimal     bool
+	floatMath   bool
+	sql         bool
+	sqlDuration bool
 }
 
 func Files(files []*ast.File) ([]byte, []diagnostic.Diagnostic) {
-	e := &emitter{files: files, enumCases: map[string]string{}, functions: map[string]*ast.Function{}, embeds: map[string]*ast.Embed{}}
+	e := &emitter{files: files, enumCases: map[string]string{}, functions: map[string]*ast.Function{}, records: map[string]*ast.Record{}, embeds: map[string]*ast.Embed{}}
 	for _, file := range files {
 		for _, decl := range file.Decls {
 			switch value := decl.(type) {
@@ -50,6 +54,8 @@ func Files(files []*ast.File) ([]byte, []diagnostic.Diagnostic) {
 				}
 			case *ast.Function:
 				e.functions[value.Name] = value
+			case *ast.Record:
+				e.records[value.Name] = value
 			case *ast.Embed:
 				e.embeds[value.Name] = value
 			}
@@ -117,14 +123,16 @@ func (e *emitter) validateStatements(statements []ast.Stmt) {
 			}
 			e.validateStatements(value.Else)
 		case *ast.TransactionStmt:
-			e.error(value.Pos, "VRB3001", "transaction code generation is not available in v0.1.0", "use verba check for SQL validation; database drivers arrive in the next runtime milestone")
+			e.validateStatements(value.Body)
 		}
 	}
 }
 
 func (e *emitter) validateExpr(expr ast.Expr) {
 	if expr.Kind == ast.ExprCall && strings.HasPrefix(expr.Value, "sql_") {
-		e.error(expr.Pos, "VRB3002", "SQL execution code generation is not available in v0.1.0", "SQL islands and bindings can be checked, but build requires an application database adapter")
+		if len(expr.Args) == 0 || e.embeds[expr.Args[0].Value] == nil || e.embeds[expr.Args[0].Value].SQL == nil {
+			e.error(expr.Pos, "VRB3002", "SQL execution metadata is unavailable", "compile the project with a PostgreSQL schema snapshot configured in verba.toml")
+		}
 	}
 	for _, arg := range expr.Args {
 		e.validateExpr(arg)
@@ -158,6 +166,20 @@ func (e *emitter) scanFeatures() {
 			case *ast.Embed:
 				if value.Kind == "regex" {
 					e.features.regex = true
+				} else if value.Kind == "sql" && value.SQL != nil {
+					e.features.sql = true
+					for _, parameter := range value.SQL.Parameters {
+						e.scanType(parameter.Type)
+						if sqlScalarType(parameter.Type).Name == "duration" {
+							e.features.sqlDuration = true
+						}
+					}
+					for _, column := range value.SQL.Columns {
+						e.scanType(column.Type)
+						if sqlScalarType(column.Type).Name == "duration" {
+							e.features.sqlDuration = true
+						}
+					}
 				}
 			}
 		}
@@ -218,6 +240,7 @@ func (e *emitter) scanStatements(statements []ast.Stmt) {
 			}
 			e.scanStatements(value.Else)
 		case *ast.TransactionStmt:
+			e.features.sql = true
 			e.scanStatements(value.Body)
 		}
 	}
@@ -260,6 +283,9 @@ func (e *emitter) scanExpr(expr ast.Expr) {
 			e.features.regex = true
 			e.features.html = true
 		case "ok", "error":
+			e.features.result = true
+		case "sql_exec", "sql_one", "sql_optional", "sql_many":
+			e.features.sql = true
 			e.features.result = true
 		}
 	}
@@ -343,6 +369,132 @@ func (e *emitter) emitDecimalRuntime() {
 	e.line(1, "return nil")
 	e.line(0, "}")
 	e.line(0, "")
+	if e.features.sql {
+		e.line(0, "func (value *Decimal) Scan(input any) error {")
+		e.line(1, "var text string")
+		e.line(1, "switch item := input.(type) {")
+		e.line(1, "case string:")
+		e.line(2, "text = item")
+		e.line(1, "case []byte:")
+		e.line(2, "text = string(item)")
+		e.line(1, "default:")
+		e.line(2, "return fmt.Errorf(\"cannot scan decimal from %%T\", input)")
+		e.line(1, "}")
+		e.line(1, "parsed, ok := new(big.Rat).SetString(text)")
+		e.line(1, "if !ok { return fmt.Errorf(\"invalid database decimal %%q\", text) }")
+		e.line(1, "value.value = parsed")
+		e.line(1, "return nil")
+		e.line(0, "}")
+		e.line(0, "")
+		e.line(0, "func (value Decimal) Value() (driver.Value, error) {")
+		e.line(1, "return value.String(), nil")
+		e.line(0, "}")
+		e.line(0, "")
+	}
+}
+
+func (e *emitter) emitSQLRuntime() {
+	e.line(0, "type sqlExecutor interface {")
+	e.line(1, "ExecContext(context.Context, string, ...any) (sql.Result, error)")
+	e.line(1, "QueryContext(context.Context, string, ...any) (*sql.Rows, error)")
+	e.line(0, "}")
+	e.line(0, "")
+	e.line(0, "type sqlScanner interface {")
+	e.line(1, "Scan(...any) error")
+	e.line(0, "}")
+	e.line(0, "")
+	e.line(0, "var database *sql.DB")
+	e.line(0, "")
+	if e.features.sqlDuration {
+		e.line(0, "type sqlDuration struct {")
+		e.line(1, "Duration time.Duration")
+		e.line(1, "Valid bool")
+		e.line(0, "}")
+		e.line(0, "")
+		e.line(0, "func (value *sqlDuration) Scan(input any) error {")
+		e.line(1, "var interval pgtype.Interval")
+		e.line(1, "if err := interval.Scan(input); err != nil { return err }")
+		e.line(1, "if !interval.Valid { *value = sqlDuration{}; return nil }")
+		e.line(1, "if interval.Months != 0 { return fmt.Errorf(\"PostgreSQL interval with months cannot be represented as duration\") }")
+		e.line(1, "value.Duration = time.Duration(interval.Microseconds)*time.Microsecond + time.Duration(interval.Days)*24*time.Hour")
+		e.line(1, "value.Valid = true")
+		e.line(1, "return nil")
+		e.line(0, "}")
+		e.line(0, "")
+		e.line(0, "func (value sqlDuration) Value() (driver.Value, error) {")
+		e.line(1, "if !value.Valid { return nil, nil }")
+		e.line(1, "if value.Duration%%time.Microsecond != 0 { return nil, fmt.Errorf(\"duration %%s exceeds PostgreSQL microsecond precision\", value.Duration) }")
+		e.line(1, "return pgtype.Interval{Microseconds: int64(value.Duration / time.Microsecond), Valid: true}.Value()")
+		e.line(0, "}")
+		e.line(0, "")
+		e.line(0, "func sqlDurationArgument(value *time.Duration) any {")
+		e.line(1, "if value == nil { return nil }")
+		e.line(1, "return sqlDuration{Duration: *value, Valid: true}")
+		e.line(0, "}")
+		e.line(0, "")
+	}
+	e.line(0, "func sqlError[T any](err error) Result[T, string] {")
+	e.line(1, "message := err.Error()")
+	e.line(1, "return Result[T, string]{Err: &message}")
+	e.line(0, "}")
+	e.line(0, "")
+	e.line(0, "func mapSQLError[T any, E any](input Result[T, string], mapped E) Result[T, E] {")
+	e.line(1, "if input.Err != nil { return Result[T, E]{Err: &mapped} }")
+	e.line(1, "return Result[T, E]{Value: input.Value}")
+	e.line(0, "}")
+	e.line(0, "")
+	e.line(0, "func sqlExec(executor sqlExecutor, ctx context.Context, query string, args ...any) Result[int64, string] {")
+	e.line(1, "result, err := executor.ExecContext(ctx, query, args...)")
+	e.line(1, "if err != nil { return sqlError[int64](err) }")
+	e.line(1, "affected, err := result.RowsAffected()")
+	e.line(1, "if err != nil { return sqlError[int64](err) }")
+	e.line(1, "return Result[int64, string]{Value: affected}")
+	e.line(0, "}")
+	e.line(0, "")
+	e.line(0, "func sqlOne[T any](executor sqlExecutor, ctx context.Context, query string, scan func(sqlScanner) (T, error), args ...any) Result[T, string] {")
+	e.line(1, "rows, err := executor.QueryContext(ctx, query, args...)")
+	e.line(1, "if err != nil { return sqlError[T](err) }")
+	e.line(1, "defer rows.Close()")
+	e.line(1, "if !rows.Next() {")
+	e.line(2, "if err := rows.Err(); err != nil { return sqlError[T](err) }")
+	e.line(2, "return sqlError[T](sql.ErrNoRows)")
+	e.line(1, "}")
+	e.line(1, "value, err := scan(rows)")
+	e.line(1, "if err != nil { return sqlError[T](err) }")
+	e.line(1, "if rows.Next() { return sqlError[T](fmt.Errorf(\"query returned more than one row\")) }")
+	e.line(1, "if err := rows.Err(); err != nil { return sqlError[T](err) }")
+	e.line(1, "return Result[T, string]{Value: value}")
+	e.line(0, "}")
+	e.line(0, "")
+	e.line(0, "func sqlOptional[T any](executor sqlExecutor, ctx context.Context, query string, scan func(sqlScanner) (T, error), args ...any) Result[*T, string] {")
+	e.line(1, "rows, err := executor.QueryContext(ctx, query, args...)")
+	e.line(1, "if err != nil { return sqlError[*T](err) }")
+	e.line(1, "defer rows.Close()")
+	e.line(1, "if !rows.Next() {")
+	e.line(2, "if err := rows.Err(); err != nil { return sqlError[*T](err) }")
+	e.line(2, "return Result[*T, string]{}")
+	e.line(1, "}")
+	e.line(1, "value, err := scan(rows)")
+	e.line(1, "if err != nil { return sqlError[*T](err) }")
+	e.line(1, "if rows.Next() { return sqlError[*T](fmt.Errorf(\"query returned more than one row\")) }")
+	e.line(1, "if err := rows.Err(); err != nil { return sqlError[*T](err) }")
+	e.line(1, "return Result[*T, string]{Value: &value}")
+	e.line(0, "}")
+	e.line(0, "")
+	e.line(0, "func sqlMany[T any](executor sqlExecutor, ctx context.Context, query string, scan func(sqlScanner) (T, error), args ...any) Result[[]T, string] {")
+	e.line(1, "rows, err := executor.QueryContext(ctx, query, args...)")
+	e.line(1, "if err != nil { return sqlError[[]T](err) }")
+	e.line(1, "defer rows.Close()")
+	e.line(1, "values := make([]T, 0)")
+	e.line(1, "for rows.Next() {")
+	e.line(2, "value, err := scan(rows)")
+	e.line(2, "if err != nil { return sqlError[[]T](err) }")
+	e.line(2, "values = append(values, value)")
+	e.line(1, "}")
+	e.line(1, "if err := rows.Err(); err != nil { return sqlError[[]T](err) }")
+	e.line(1, "return Result[[]T, string]{Value: values}")
+	e.line(0, "}")
+	e.line(0, "")
 }
 
 func (e *emitter) emitRuntime() {
@@ -364,6 +516,9 @@ func (e *emitter) emitRuntime() {
 		e.line(1, "Err *E")
 		e.line(0, "}")
 		e.line(0, "")
+	}
+	if e.features.sql {
+		e.emitSQLRuntime()
 	}
 	if e.features.template {
 		e.line(0, "func renderTemplate(source string, values map[string]string, escapeHTML bool) string {")
@@ -415,6 +570,9 @@ func (e *emitter) emitProgram() {
 	e.line(0, "")
 	e.line(0, `import (`)
 	imports := []string{"fmt", "io", "net/http", "os"}
+	if e.features.sql {
+		imports = append(imports, "context", "database/sql")
+	}
 	if e.features.randomUUID {
 		imports = append(imports, "crypto/rand")
 	}
@@ -430,6 +588,9 @@ func (e *emitter) emitProgram() {
 	if e.features.decimal {
 		imports = append(imports, "math/big")
 	}
+	if e.features.sql && (e.features.decimal || e.features.sqlDuration) {
+		imports = append(imports, "database/sql/driver")
+	}
 	if e.features.regex {
 		imports = append(imports, "regexp")
 	}
@@ -441,6 +602,12 @@ func (e *emitter) emitProgram() {
 	}
 	for _, item := range imports {
 		e.line(1, "%s", strconv.Quote(item))
+	}
+	if e.features.sql {
+		e.line(1, "_ %s", strconv.Quote("github.com/jackc/pgx/v5/stdlib"))
+		if e.features.sqlDuration {
+			e.line(1, "%s", strconv.Quote("github.com/jackc/pgx/v5/pgtype"))
+		}
 	}
 	e.line(0, `)`)
 	e.line(0, "")
@@ -457,9 +624,37 @@ func (e *emitter) emitProgram() {
 				if value.Kind == "regex" {
 					e.line(0, "var %s = regexp.MustCompile(%s)", safeName(value.Name), strconv.Quote(value.Raw))
 				} else {
-					e.line(0, "var %s = %s", safeName(value.Name), strconv.Quote(value.Raw))
+					contents := value.Raw
+					if value.Kind == "sql" && value.SQL != nil {
+						contents = value.SQL.Text
+					}
+					e.line(0, "var %s = %s", safeName(value.Name), strconv.Quote(contents))
 				}
 				e.line(0, "")
+			}
+		}
+	}
+	emittedRows := map[string]bool{}
+	for _, file := range e.files {
+		for _, decl := range file.Decls {
+			embed, ok := decl.(*ast.Embed)
+			if !ok || embed.SQL == nil || len(embed.SQL.Columns) == 0 || embed.SQL.RowType.Name == "" || e.records[embed.SQL.RowType.Name] != nil || emittedRows[embed.SQL.RowType.Name] {
+				continue
+			}
+			e.line(0, "type %s struct {", goType(embed.SQL.RowType))
+			for _, column := range embed.SQL.Columns {
+				e.line(1, "%s %s `json:%s`", exported(column.Name), goType(column.Type), strconv.Quote(column.Name))
+			}
+			e.line(0, "}")
+			e.line(0, "")
+			emittedRows[embed.SQL.RowType.Name] = true
+		}
+	}
+	for _, file := range e.files {
+		for _, decl := range file.Decls {
+			embed, ok := decl.(*ast.Embed)
+			if ok && embed.SQL != nil && len(embed.SQL.Columns) > 0 && embed.SQL.RowType.Name != "" {
+				e.emitSQLScanner(embed)
 			}
 		}
 	}
@@ -478,6 +673,38 @@ func (e *emitter) emitProgram() {
 		}
 	}
 	e.emitMain()
+}
+
+func (e *emitter) emitSQLScanner(embed *ast.Embed) {
+	name := "scan" + exported(embed.Name) + "Row"
+	typeName := goType(embed.SQL.RowType)
+	e.line(0, "func %s(scanner sqlScanner) (%s, error) {", name, typeName)
+	e.line(1, "var value %s", typeName)
+	destinations := make([]string, 0, len(embed.SQL.Columns))
+	var assignments []string
+	for index, column := range embed.SQL.Columns {
+		if sqlScalarType(column.Type).Name == "duration" {
+			temporary := fmt.Sprintf("sqlColumn%d", index+1)
+			e.line(1, "var %s sqlDuration", temporary)
+			destinations = append(destinations, "&"+temporary)
+			field := "value." + exported(column.Name)
+			if column.Type.Name == "optional" {
+				assignments = append(assignments, fmt.Sprintf("if %s.Valid { item := %s.Duration; %s = &item }", temporary, temporary, field))
+			} else {
+				assignments = append(assignments, fmt.Sprintf("if !%s.Valid { return value, fmt.Errorf(%s) }; %s = %s.Duration", temporary, strconv.Quote("database returned NULL for "+column.Name), field, temporary))
+			}
+		} else {
+			destinations = append(destinations, "&value."+exported(column.Name))
+		}
+	}
+	e.line(1, "err := scanner.Scan(%s)", strings.Join(destinations, ", "))
+	e.line(1, "if err != nil { return value, err }")
+	for _, assignment := range assignments {
+		e.line(1, "%s", assignment)
+	}
+	e.line(1, "return value, nil")
+	e.line(0, "}")
+	e.line(0, "")
 }
 
 func (e *emitter) emitRecord(record *ast.Record) {
@@ -511,6 +738,10 @@ func (e *emitter) emitFunction(fn *ast.Function) {
 		result = " " + goType(*fn.Output)
 	}
 	e.line(0, "func %s(%s)%s {", safeName(fn.Name), strings.Join(params, ", "), result)
+	if statementsUseSQL(fn.Body) {
+		e.line(1, "verbaSQLExecutor := sqlExecutor(database)")
+		e.line(1, "verbaSQLContext := context.Background()")
+	}
 	e.emitStatements(fn.Body, 1, fn.Output, false)
 	if fn.Output != nil && !blockTerminates(fn.Body) {
 		e.line(1, "var zero %s", goType(*fn.Output))
@@ -528,6 +759,10 @@ func (e *emitter) emitRoute(route *ast.Route) {
 	e.line(1, "_ = request_headers")
 	e.line(1, "request_context := r.Context()")
 	e.line(1, "_ = request_context")
+	if statementsUseSQL(route.Body) {
+		e.line(1, "verbaSQLExecutor := sqlExecutor(database)")
+		e.line(1, "verbaSQLContext := request_context")
+	}
 	for _, parameter := range routeParameters(route.Path) {
 		e.line(1, "%s := r.PathValue(%s)", safeName(parameter), strconv.Quote(parameter))
 	}
@@ -549,16 +784,7 @@ func (e *emitter) emitStatements(statements []ast.Stmt, indent int, output *ast.
 				expr.Try = false
 				e.line(indent, "%s := %s", tmp, e.expr(expr))
 				e.line(indent, "if %s.Err != nil {", tmp)
-				if inRoute {
-					e.line(indent+1, `http.Error(w, fmt.Sprint(*%s.Err), http.StatusInternalServerError)`, tmp)
-					e.line(indent+1, "return")
-				} else if output != nil && output.Name == "result" {
-					errorName := e.nextTemp()
-					e.line(indent+1, "%s := *%s.Err", errorName, tmp)
-					e.line(indent+1, "return %s{Err: &%s}", goType(*output), errorName)
-				} else {
-					e.line(indent+1, "panic(fmt.Sprint(*%s.Err))", tmp)
-				}
+				e.emitTryFailure(tmp, indent+1, output, inRoute)
 				e.line(indent, "}")
 				e.line(indent, "%s := %s.Value", safeName(value.Name), tmp)
 				e.line(indent, "_ = %s", safeName(value.Name))
@@ -577,7 +803,17 @@ func (e *emitter) emitStatements(statements []ast.Stmt, indent int, output *ast.
 			}
 			e.line(indent, "%s = %s", strings.Join(path, "."), e.expr(value.Value))
 		case *ast.ExprStmt:
-			e.line(indent, "%s", e.expr(value.Value))
+			if value.Value.Try && value.Value.Kind == ast.ExprCall {
+				tmp := e.nextTemp()
+				expr := value.Value
+				expr.Try = false
+				e.line(indent, "%s := %s", tmp, e.expr(expr))
+				e.line(indent, "if %s.Err != nil {", tmp)
+				e.emitTryFailure(tmp, indent+1, output, inRoute)
+				e.line(indent, "}")
+			} else {
+				e.line(indent, "%s", e.expr(value.Value))
+			}
 		case *ast.ReturnStmt:
 			if value.Value == nil {
 				e.line(indent, "return")
@@ -615,7 +851,60 @@ func (e *emitter) emitStatements(statements []ast.Stmt, indent int, output *ast.
 				e.emitStatements(value.Else, indent+1, output, inRoute)
 			}
 			e.line(indent, "}")
+		case *ast.TransactionStmt:
+			txName := e.nextTemp()
+			errorName := e.nextTemp()
+			previousName := e.nextTemp()
+			e.line(indent, "%s, %s := database.BeginTx(verbaSQLContext, nil)", txName, errorName)
+			e.line(indent, "if %s != nil {", errorName)
+			e.emitDatabaseFailure(errorName, indent+1, output, inRoute)
+			e.line(indent, "}")
+			e.line(indent, "defer %s.Rollback()", txName)
+			e.line(indent, "%s := verbaSQLExecutor", previousName)
+			e.line(indent, "verbaSQLExecutor = %s", txName)
+			previousTransaction := e.transaction
+			e.transaction = txName
+			e.emitStatements(value.Body, indent, output, inRoute)
+			e.transaction = previousTransaction
+			e.line(indent, "%s = %s.Commit()", errorName, txName)
+			e.line(indent, "verbaSQLExecutor = %s", previousName)
+			e.line(indent, "if %s != nil {", errorName)
+			e.emitDatabaseFailure(errorName, indent+1, output, inRoute)
+			e.line(indent, "}")
 		}
+	}
+}
+
+func (e *emitter) emitTryFailure(result string, indent int, output *ast.Type, inRoute bool) {
+	if e.transaction != "" {
+		e.line(indent, "_ = %s.Rollback()", e.transaction)
+	}
+	if inRoute {
+		e.line(indent, `http.Error(w, fmt.Sprint(*%s.Err), http.StatusInternalServerError)`, result)
+		e.line(indent, "return")
+	} else if output != nil && output.Name == "result" {
+		errorName := e.nextTemp()
+		e.line(indent, "%s := *%s.Err", errorName, result)
+		e.line(indent, "return %s{Err: &%s}", goType(*output), errorName)
+	} else {
+		e.line(indent, "panic(fmt.Sprint(*%s.Err))", result)
+	}
+}
+
+func (e *emitter) emitDatabaseFailure(err string, indent int, output *ast.Type, inRoute bool) {
+	if inRoute {
+		e.line(indent, "http.Error(w, %s.Error(), http.StatusInternalServerError)", err)
+		e.line(indent, "return")
+	} else if output != nil && output.Name == "result" && len(output.Args) == 2 && output.Args[1].Name == "string" {
+		messageName := e.nextTemp()
+		e.line(indent, "%s := %s.Error()", messageName, err)
+		e.line(indent, "return %s{Err: &%s}", goType(*output), messageName)
+	} else if output != nil && output.Name == "result" && len(output.Args) == 2 && e.enumCases["database_failure"] != "" {
+		errorName := e.nextTemp()
+		e.line(indent, "%s := %s", errorName, e.enumCases["database_failure"])
+		e.line(indent, "return %s{Err: &%s}", goType(*output), errorName)
+	} else {
+		e.line(indent, "panic(%s)", err)
 	}
 }
 
@@ -728,6 +1017,8 @@ func (e *emitter) call(expr ast.Expr) string {
 		}
 	}
 	switch expr.Value {
+	case "sql_exec", "sql_one", "sql_optional", "sql_many":
+		return e.sqlCall(expr)
 	case "add":
 		if expr.ResolvedType.Name == "decimal" {
 			return args[0] + ".Add(" + args[1] + ")"
@@ -841,8 +1132,64 @@ func (e *emitter) call(expr ast.Expr) string {
 	return safeName(expr.Value) + "(" + strings.Join(args, ", ") + ")"
 }
 
+func (e *emitter) sqlCall(expr ast.Expr) string {
+	if len(expr.Args) == 0 {
+		return "nil"
+	}
+	embed := e.embeds[expr.Args[0].Value]
+	if embed == nil || embed.SQL == nil {
+		return "nil"
+	}
+	bindings := map[string]ast.Expr{}
+	for _, argument := range expr.NamedArgs {
+		bindings[argument.Name] = argument.Value
+	}
+	arguments := []string{"verbaSQLExecutor", "verbaSQLContext", safeName(embed.Name)}
+	if expr.Value != "sql_exec" {
+		arguments = append(arguments, "scan"+exported(embed.Name)+"Row")
+	}
+	for _, parameter := range embed.SQL.Parameters {
+		binding := bindings[parameter.Name]
+		value := e.expr(binding)
+		if sqlScalarType(parameter.Type).Name == "duration" {
+			if binding.ResolvedType.Name == "optional" {
+				value = "sqlDurationArgument(" + value + ")"
+			} else {
+				value = "sqlDuration{Duration: " + value + ", Valid: true}"
+			}
+		}
+		arguments = append(arguments, value)
+	}
+	result := "nil"
+	switch expr.Value {
+	case "sql_exec":
+		result = "sqlExec(" + strings.Join(arguments, ", ") + ")"
+	case "sql_one":
+		result = "sqlOne[" + goType(embed.SQL.RowType) + "](" + strings.Join(arguments, ", ") + ")"
+	case "sql_optional":
+		result = "sqlOptional[" + goType(embed.SQL.RowType) + "](" + strings.Join(arguments, ", ") + ")"
+	case "sql_many":
+		result = "sqlMany[" + goType(embed.SQL.RowType) + "](" + strings.Join(arguments, ", ") + ")"
+	}
+	if expr.CallResultType.Name == "result" && len(expr.CallResultType.Args) == 2 && expr.CallResultType.Args[1].Name != "string" {
+		if mapped := e.enumCases["database_failure"]; mapped != "" {
+			result = "mapSQLError(" + result + ", " + mapped + ")"
+		}
+	}
+	return result
+}
+
 func (e *emitter) emitMain() {
 	e.line(0, "func main() {")
+	if e.features.sql {
+		e.line(1, `databaseURL := os.Getenv("VERBA_DATABASE_URL")`)
+		e.line(1, `if databaseURL == "" { panic("VERBA_DATABASE_URL is required") }`)
+		e.line(1, "var err error")
+		e.line(1, `database, err = sql.Open("pgx", databaseURL)`)
+		e.line(1, "if err != nil { panic(err) }")
+		e.line(1, "defer database.Close()")
+		e.line(1, "if err := database.Ping(); err != nil { panic(err) }")
+	}
 	e.line(1, "mux := http.NewServeMux()")
 	count := 0
 	for _, file := range e.files {
@@ -893,6 +1240,81 @@ func goType(t ast.Type) string {
 	default:
 		return exported(t.Name)
 	}
+}
+
+func statementsUseSQL(statements []ast.Stmt) bool {
+	for _, statement := range statements {
+		switch value := statement.(type) {
+		case *ast.LetStmt:
+			if exprUsesSQL(value.Value) {
+				return true
+			}
+		case *ast.SetStmt:
+			if exprUsesSQL(value.Value) {
+				return true
+			}
+		case *ast.ExprStmt:
+			if exprUsesSQL(value.Value) {
+				return true
+			}
+		case *ast.ReturnStmt:
+			if value.Value != nil && exprUsesSQL(*value.Value) {
+				return true
+			}
+		case *ast.RespondStmt:
+			if value.Value != nil && exprUsesSQL(*value.Value) {
+				return true
+			}
+		case *ast.IfStmt:
+			if exprUsesSQL(value.Condition) || statementsUseSQL(value.Then) || statementsUseSQL(value.Else) {
+				return true
+			}
+		case *ast.ForStmt:
+			if exprUsesSQL(value.Iterable) || statementsUseSQL(value.Body) {
+				return true
+			}
+		case *ast.WhileStmt:
+			if exprUsesSQL(value.Condition) || statementsUseSQL(value.Body) {
+				return true
+			}
+		case *ast.MatchStmt:
+			if exprUsesSQL(value.Value) || statementsUseSQL(value.Else) {
+				return true
+			}
+			for _, matchCase := range value.Cases {
+				if exprUsesSQL(matchCase.Pattern) || statementsUseSQL(matchCase.Body) {
+					return true
+				}
+			}
+		case *ast.TransactionStmt:
+			return true
+		}
+	}
+	return false
+}
+
+func exprUsesSQL(expr ast.Expr) bool {
+	if expr.Kind == ast.ExprCall && strings.HasPrefix(expr.Value, "sql_") {
+		return true
+	}
+	for _, argument := range expr.Args {
+		if exprUsesSQL(argument) {
+			return true
+		}
+	}
+	for _, argument := range expr.NamedArgs {
+		if exprUsesSQL(argument.Value) {
+			return true
+		}
+	}
+	return false
+}
+
+func sqlScalarType(value ast.Type) ast.Type {
+	if value.Name == "optional" && len(value.Args) == 1 {
+		return value.Args[0]
+	}
+	return value
 }
 
 func exported(value string) string {

@@ -1,0 +1,86 @@
+module postgres_service
+
+use http
+use json
+use sql postgres
+use time
+use uuid
+
+record create_account_request
+begin
+    field name string
+    field opening_balance decimal
+end
+
+record account
+begin
+    field id uuid
+    field name string
+    field balance decimal
+    field created_at time
+end
+
+embed sql insert_account until end_insert_account
+INSERT INTO accounts (id, name, balance)
+VALUES (:id, :name, :balance)
+RETURNING id, name, balance, created_at;
+end_insert_account
+
+embed sql find_account until end_find_account
+SELECT id, name, balance, created_at
+FROM accounts
+WHERE id = :id;
+end_find_account
+
+embed sql update_balance until end_update_balance
+UPDATE accounts
+SET balance = :balance
+WHERE id = :id;
+end_update_balance
+
+route create_account
+method post
+path /accounts
+begin
+    let payload to be try call json_decode create_account_request request_body
+    let name to be get payload name
+    let opening_balance to be get payload opening_balance
+    let id to be call new_uuid
+    let created to be try call sql_one insert_account
+    begin
+        with id id
+        with name name
+        with balance opening_balance
+    end
+    respond json 201 created
+end
+
+route find_account_route
+method get
+path /accounts/{id}
+begin
+    let account_id to be try call parse_uuid id
+    let found to be try call sql_optional find_account
+    begin
+        with id account_id
+    end
+    respond json 200 found
+end
+
+route replace_balance
+method put
+path /accounts/{id}
+begin
+    let account_id to be try call parse_uuid id
+    let payload to be try call json_decode create_account_request request_body
+    let balance to be get payload opening_balance
+    transaction database
+    begin
+        try call sql_exec update_balance
+        begin
+            with balance balance
+            with id account_id
+        end
+    end
+    respond empty 204
+end

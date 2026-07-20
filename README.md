@@ -31,6 +31,8 @@ GET /greet/{name}
 
 可以通过 `VERBA_ADDRESS` 修改监听地址。
 
+PostgreSQL 项目还需要 `VERBA_DATABASE_URL`。生成程序使用 `database/sql` 与 pgx，并在启动时验证连接。
+
 ## CLI
 
 ```text
@@ -61,15 +63,16 @@ verba help
 - `let`、`var`、`set`、`call`、`if` / `else`、`match` / `case`、`for`、`while`、`return`、`respond` 和 `transaction` 的解析。
 - 基础类型以及 `optional`、`list`、`map`、`result` 类型构造。
 - `get`、`is` / `is not`、`try call` 和命名参数块。
-- JSON 与正则语法校验、HTML/text 模板槽位检查，以及 SQL 命名参数和 `with` 绑定的一致性检查。
+- JSON 与正则语法校验、HTML/text 模板槽位检查，以及 PostgreSQL schema、命名参数、列类型和结果行检查。
 - 类型化作用域、函数参数、字段路径、条件、返回路径、optional 和 result / try 检查。
 - 数值字面量按参数、返回值、赋值和算术上下文定型，并在编译期检查整数宽度与浮点范围。
 - `decimal` 使用任意精度精确运算和无损 JSON number 编解码，不会降为 `float64`。
 - JSON 解码与 UUID 解析使用真实 `result` 错误路径；HTML 模板默认转义，正则资源预编译。
-- JSON、文本和空 HTTP 响应的 Go 代码生成。
+- JSON、文本和空 HTTP 响应，以及 `sql_exec`、`sql_one`、`sql_optional`、`sql_many` 和显式事务的 Go 代码生成。
+- SQL 构建使用固定版本 `pgx/v5.7.6`；精确 decimal 支持数据库扫描和参数绑定，事务在 `try` 失败时回滚、正常退出时提交。
 - `use` 能力与 `verba.toml` 依赖解析、缺失能力检查和确定性 capability 审计。
 
-0.1.0 的 Go 后端暂不生成数据库执行代码。SQL 岛及绑定可以通过 `verba check` 验证；包含 `sql_exec`、`sql_one`、`sql_optional`、`sql_many` 或 `transaction` 的程序在 `build` 阶段会收到明确诊断。这样不会在未选择数据库驱动和连接模型时生成行为不可靠的程序。
+当前 SQL 适配器聚焦可静态证明的直接单表 PostgreSQL 语句。JOIN、子查询、集合运算、动态标识符、迁移执行和嵌套事务仍会被拒绝或留待后续版本；schema 快照与运行数据库的一致性由部署流程负责。
 
 完整语言方向与后续范围见 [design.md](design.md)。
 
@@ -90,7 +93,7 @@ end
 
 ## 入门教程
 
-从 [Verba 入门教程](docs/tutorial/README.md) 开始，通过九个章节学习安装、基础语法、函数与类型、HTTP、语法岛、工具链、项目清单和精确数值。六个可执行项目位于 `learn/`。
+从 [Verba 入门教程](docs/tutorial/README.md) 开始，通过十个章节学习安装、基础语法、函数与类型、HTTP、语法岛、工具链、项目清单、精确数值和 PostgreSQL。七个可执行项目位于 `learn/`。
 
 ## 开发
 
@@ -113,6 +116,7 @@ internal/lexer         核心 token、数值和受控字面量词法检查
 internal/parser        行导向语法与 AST 构建
 internal/resolve       use、依赖、能力需求与审计解析
 internal/check         名称、类型、作用域和适配器检查
+internal/sqlpostgres   PostgreSQL schema、参数和结果列分析
 internal/format        幂等格式化器
 internal/emitgo        Go 后端
 internal/compiler      文件发现与编译流水线

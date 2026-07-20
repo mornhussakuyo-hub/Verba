@@ -17,11 +17,11 @@ The current work focuses on a typed semantic pipeline before expanding the runti
 | Core lexer | Partial | Keywords, identifiers, numeric syntax, newlines, controlled literals, and island exclusion work; parser token consumption and broader recovery remain |
 | Parser | Partial | Uses scanned island regions and lexer diagnostics; typed route inputs, richer literals, token-driven parsing, and broader recovery remain |
 | Name resolver | Partial | Module identity, manifest dependencies, `use` capabilities, typed local scopes, and forward declarations work; imported symbols, case ambiguity, and references remain |
-| Type checker | In progress | Complete builtin signatures, control-flow joins, SQL result types |
-| Island registry | Partial | JSON and SQL binding checks, compiled regexes, and checked HTML/text slots exist; SQL schema metadata and richer island parsers remain |
+| Type checker | In progress | Typed SQL bindings/results and contextual database errors work; complete builtin signatures and control-flow joins remain |
+| Island registry | Partial | PostgreSQL schema snapshots, typed single-table SQL, compiled regexes, and checked HTML/text slots exist; richer SQL/HTML parsers remain |
 | Typed IR | Missing | Stable lowered representation between checking and emission |
-| Go emitter | Partial | HTTP, exact decimal arithmetic/JSON, typed JSON/UUID failures, regexes, and escaped templates work; SQL, application error mapping, and full builtins remain |
-| Build driver | Partial | Trimmed reproducible builds work; cache, build metadata, and source-mapped backend errors remain |
+| Go emitter | Partial | HTTP, PostgreSQL queries/transactions, exact decimal SQL/JSON, contextual database failures, regexes, and escaped templates work; full builtins remain |
+| Build driver | Partial | Trimmed builds and isolated pinned pgx resolution work; cache, build metadata, and source-mapped backend errors remain |
 | Language server | Missing | Diagnostics, navigation, completion, rename, nested island tooling |
 
 ## Language and runtime
@@ -29,19 +29,19 @@ The current work focuses on a typed semantic pipeline before expanding the runti
 | Area | Implemented | Remaining work |
 | --- | --- | --- |
 | Declarations | module, use, record, enum, function, route, embed, strict TOML project manifest | imported source modules and lock files |
-| Statements | let, var, set, call, if/else, match/case, for, while, return, respond, transaction parsing | executable transactions |
+| Statements | let, var, set, call, if/else, match/case, for, while, return, respond, executable PostgreSQL transactions | nested transactions and savepoints |
 | Types | scalar names, optional, list, map, result, records, enums, contextual numeric constants, exact decimal runtime | explicit conversion APIs |
 | Expressions | atoms, controlled text/url/path, call, get, equality | complete builtin set and typed conversion functions |
 | HTTP | generated `net/http` routes, path values, body/headers/context bindings, route error boundary | typed query/header decoding and declared application-error mapping |
 | JSON | island syntax validation, typed `result` decoding errors, generated encoding | schema options and typed constants |
-| SQL | named parameter extraction and exact binding checks | dialect parser, schema snapshot, drivers, rows, transactions |
+| SQL | PostgreSQL schema snapshots, named `$n` rewriting, typed bindings/rows, exec/one/optional/many, pgx driver, rollback/commit | joins, subqueries, migrations, live database integration suite |
 | HTML | exact template slot checking, generated renderer, escaped dynamic values | structural parser and explicit trusted HTML model |
 | Regex | compile-time validation, precompiled resources, runtime matching helper | richer regex diagnostics and editor integration |
 | Capabilities | built-in and explicit capability validation, inferred requirements, dependency usage, text/JSON audit output | runtime enforcement and deployment policy generation |
 
 ## Documentation
 
-The repository has a design document, README, and a nine-chapter Chinese beginner tutorial under `docs/tutorial/`. Six runnable projects under `learn/` are checked and built independently by CI.
+The repository has a design document, README, and a ten-chapter Chinese beginner tutorial under `docs/tutorial/`. Seven runnable projects under `learn/` are checked and built independently by CI.
 
 ## Release gates
 

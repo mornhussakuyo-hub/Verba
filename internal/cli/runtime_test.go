@@ -206,6 +206,62 @@ end
 	stopServer()
 }
 
+func TestBuildPostgresService(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "verba.toml"), []byte(`name = "postgres_test"
+version = "0.1.0"
+target = "go"
+
+[database]
+dialect = "postgres"
+schema = "schema.sql"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "schema.sql"), []byte("CREATE TABLE users (id text PRIMARY KEY, name text NOT NULL, retention interval NOT NULL);\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "main.vrb"), []byte(`module postgres_test
+use http
+use json
+use sql postgres
+use time
+record user
+begin
+    field id string
+    field name string
+    field retention duration
+end
+embed sql find_user until end_sql
+SELECT id, name, retention FROM users WHERE id = :id;
+end_sql
+route find
+method get
+path /users/{id}
+begin
+    let found to be try call sql_optional find_user
+    begin
+        with id id
+    end
+    respond json 200 found
+end
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(directory, "postgres-service")
+	if runtime.GOOS == "windows" {
+		executable += ".exe"
+	}
+	var output bytes.Buffer
+	command := &CLI{Stdout: &output, Stderr: &output, Stdin: strings.NewReader("")}
+	if code := command.Run([]string{"build", "-o", executable, directory}); code != 0 {
+		t.Fatalf("build exited with %d:\n%s", code, output.String())
+	}
+	if info, err := os.Stat(executable); err != nil || info.IsDir() {
+		t.Fatalf("generated executable is unavailable: %v", err)
+	}
+}
+
 func waitForHTTP(t *testing.T, client *http.Client, url string, serverOutput *bytes.Buffer) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)

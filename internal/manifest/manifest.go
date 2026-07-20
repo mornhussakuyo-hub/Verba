@@ -20,8 +20,9 @@ var identifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var versionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
 
 type Database struct {
-	Dialect string `toml:"dialect"`
-	Schema  string `toml:"schema"`
+	Dialect    string `toml:"dialect"`
+	Schema     string `toml:"schema"`
+	SchemaPath string `toml:"-"`
 }
 
 type Manifest struct {
@@ -119,6 +120,8 @@ func validate(value *Manifest) []diagnostic.Diagnostic {
 			diagnostics = append(diagnostics, item(value.Path, 1, 1, "VRB0907", fmt.Sprintf("database schema %q does not exist", value.Database.Schema), "create the schema snapshot or correct its path"))
 		} else if !resolvedInside(value.Root, schema) {
 			diagnostics = append(diagnostics, item(value.Path, 1, 1, "VRB0907", "database schema symlink resolves outside the project directory", "store the schema snapshot inside the project instead of linking outside it"))
+		} else {
+			value.Database.SchemaPath = schema
 		}
 	}
 	for name, constraint := range value.Dependencies {

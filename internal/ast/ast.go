@@ -78,11 +78,30 @@ type Embed struct {
 	Raw        string
 	RawStart   int
 	RawEnd     int
+	SQL        *SQLQuery
 	Pos        Position
 }
 
 func (d *Embed) DeclName() string  { return d.Name }
 func (d *Embed) DeclPos() Position { return d.Pos }
+
+type SQLColumn struct {
+	Name string
+	Type Type
+}
+
+type SQLParameter struct {
+	Name string
+	Type Type
+}
+
+type SQLQuery struct {
+	Statement  string
+	Text       string
+	Parameters []SQLParameter
+	Columns    []SQLColumn
+	RowType    Type
+}
 
 type Type struct {
 	Name string
@@ -109,15 +128,16 @@ const (
 )
 
 type Expr struct {
-	Kind         ExprKind
-	Value        string
-	LiteralType  string
-	ResolvedType Type
-	Args         []Expr
-	NamedArgs    []NamedArg
-	Try          bool
-	Not          bool
-	Pos          Position
+	Kind           ExprKind
+	Value          string
+	LiteralType    string
+	ResolvedType   Type
+	CallResultType Type
+	Args           []Expr
+	NamedArgs      []NamedArg
+	Try            bool
+	Not            bool
+	Pos            Position
 }
 
 type NamedArg struct {
