@@ -42,3 +42,33 @@ func TestMissingEndProducesDiagnostic(t *testing.T) {
 		t.Fatalf("expected VRB0311, got %#v", diagnostics)
 	}
 }
+
+func TestParseMatch(t *testing.T) {
+	source := []byte(`module example
+function label
+input value string
+output string
+begin
+    match value
+    begin
+        case active
+        begin
+            return text enabled
+        end
+        else
+        begin
+            return text disabled
+        end
+    end
+end
+`)
+	file, diagnostics := Parse("match.vrb", source)
+	if len(diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", diagnostics)
+	}
+	function := file.Decls[0].(*ast.Function)
+	statement, ok := function.Body[0].(*ast.MatchStmt)
+	if !ok || len(statement.Cases) != 1 || len(statement.Else) != 1 {
+		t.Fatalf("unexpected match statement: %#v", function.Body[0])
+	}
+}

@@ -198,6 +198,39 @@ end
 	}
 }
 
+func TestTypedMatch(t *testing.T) {
+	source := []byte(`module example
+enum role
+begin
+    case admin
+    case member
+end
+function label
+input value role
+output string
+begin
+    match value
+    begin
+        case admin
+        begin
+            return text administrator
+        end
+        case member
+        begin
+            return text member
+        end
+        else
+        begin
+            return text unknown
+        end
+    end
+end
+`)
+	if diagnostics := checkSource(t, source); len(diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", diagnostics)
+	}
+}
+
 func checkSource(t *testing.T, source []byte) []diagnostic.Diagnostic {
 	t.Helper()
 	file, parseDiagnostics := parser.Parse("test.vrb", source)

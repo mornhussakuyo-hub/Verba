@@ -15,7 +15,7 @@ The current work focuses on a typed semantic pipeline before expanding the runti
 | Source manager | Partial | UTF-8 validation, source spans, line maps, imported module sources |
 | Region scanner | Partial | Dedicated core/literal/island regions and byte-accurate island spans |
 | Core lexer | Missing | Tokens, keyword classification, numeric validation, recovery |
-| Parser | Partial | Match/case, typed route inputs, richer literals, recovery coverage |
+| Parser | Partial | Typed route inputs, richer literals, and broader recovery coverage |
 | Name resolver | Partial | Typed local scopes exist; modules, imports, case ambiguity, references remain |
 | Type checker | In progress | Numeric constants, complete builtin signatures, control-flow joins, SQL result types |
 | Island registry | Partial | JSON and SQL binding checks exist; regex, HTML, text, schema metadata remain |
@@ -29,7 +29,7 @@ The current work focuses on a typed semantic pipeline before expanding the runti
 | Area | Implemented | Remaining work |
 | --- | --- | --- |
 | Declarations | module, use, record, enum, function, route, embed | package manifest and imported modules |
-| Statements | let, var, set, call, if/else, for, while, return, respond, transaction parsing | match/case and executable transactions |
+| Statements | let, var, set, call, if/else, match/case, for, while, return, respond, transaction parsing | executable transactions |
 | Types | scalar names, optional, list, map, result, records, enums | strict numeric constants, decimal runtime, conversion APIs |
 | Expressions | atoms, controlled text/url/path, call, get, equality | complete builtin set and typed conversion functions |
 | HTTP | generated `net/http` routes, path values, body/headers/context bindings | typed query/header/body decoding and error mapping |

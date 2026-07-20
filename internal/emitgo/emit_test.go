@@ -87,3 +87,43 @@ end
 		}
 	}
 }
+
+func TestEmitMatchAsSwitch(t *testing.T) {
+	source := []byte(`module example
+enum role
+begin
+    case admin
+    case member
+end
+function label
+input value role
+output string
+begin
+    match value
+    begin
+        case admin
+        begin
+            return text administrator
+        end
+        else
+        begin
+            return text user
+        end
+    end
+end
+`)
+	file, parseDiagnostics := verbaParser.Parse("match.vrb", source)
+	if len(parseDiagnostics) != 0 {
+		t.Fatalf("parse diagnostics: %#v", parseDiagnostics)
+	}
+	generated, diagnostics := Files([]*ast.File{file})
+	if len(diagnostics) != 0 {
+		t.Fatalf("emit diagnostics: %#v", diagnostics)
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "main.go", generated, parser.AllErrors); err != nil {
+		t.Fatalf("generated Go is invalid: %v\n%s", err, generated)
+	}
+	if !strings.Contains(string(generated), "switch value") {
+		t.Fatalf("generated match does not use switch:\n%s", generated)
+	}
+}

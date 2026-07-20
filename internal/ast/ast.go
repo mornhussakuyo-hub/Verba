@@ -192,6 +192,21 @@ type WhileStmt struct {
 
 func (s *WhileStmt) StmtPos() Position { return s.Pos }
 
+type MatchCase struct {
+	Pattern Expr
+	Body    []Stmt
+	Pos     Position
+}
+
+type MatchStmt struct {
+	Value Expr
+	Cases []MatchCase
+	Else  []Stmt
+	Pos   Position
+}
+
+func (s *MatchStmt) StmtPos() Position { return s.Pos }
+
 type TransactionStmt struct {
 	Resource string
 	Body     []Stmt

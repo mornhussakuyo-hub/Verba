@@ -33,6 +33,28 @@ end
 
 枚举值是静态类型值，而不是任意字符串。不同 enum 之间不能隐式转换。
 
+枚举很适合配合 `match`：
+
+```verba
+match value
+begin
+    case admin
+    begin
+        return text administrator
+    end
+    case member
+    begin
+        return text member
+    end
+    else
+    begin
+        return text unknown
+    end
+end
+```
+
+case 类型必须与 match 值一致，重复 case 会在编译期报错。需要从 match 返回值时，每个 case 和 else 都必须终止。
+
 ## 函数
 
 ```verba

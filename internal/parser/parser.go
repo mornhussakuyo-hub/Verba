@@ -389,6 +389,8 @@ func (p *parser) parseStatement() ast.Stmt {
 		p.index++
 		body := p.parseBlock("while", "condition")
 		return &ast.WhileStmt{Condition: condition, Body: body, Pos: pos}
+	case "match":
+		return p.parseMatch(parts, pos)
 	case "transaction":
 		if len(parts) != 2 {
 			p.error(pos, "VRB0406", "transaction requires one resource name", "example: transaction database")
@@ -401,10 +403,61 @@ func (p *parser) parseStatement() ast.Stmt {
 		body := p.parseBlock("transaction", resource)
 		return &ast.TransactionStmt{Resource: resource, Body: body, Pos: pos}
 	default:
-		p.error(pos, "VRB0400", fmt.Sprintf("unknown statement %q", parts[0]), "expected let, var, set, call, return, respond, if, for, while, or transaction")
+		p.error(pos, "VRB0400", fmt.Sprintf("unknown statement %q", parts[0]), "expected let, var, set, call, return, respond, if, for, while, match, or transaction")
 		p.index++
 		return nil
 	}
+}
+
+func (p *parser) parseMatch(parts []string, pos ast.Position) ast.Stmt {
+	if len(parts) < 2 {
+		p.error(pos, "VRB0410", "match requires a value", "example: match current_role")
+		p.index++
+		return nil
+	}
+	value := p.parseExpr(parts[1:], pos)
+	p.index++
+	if !p.consumeBegin("match", "value") {
+		return &ast.MatchStmt{Value: value, Pos: pos}
+	}
+	statement := &ast.MatchStmt{Value: value, Pos: pos}
+	seenElse := false
+	for !p.done() {
+		p.skipTrivia()
+		if p.done() {
+			break
+		}
+		line := p.current()
+		caseParts := strings.Fields(line.text)
+		if len(caseParts) == 1 && caseParts[0] == "end" {
+			p.index++
+			return statement
+		}
+		if len(caseParts) == 1 && caseParts[0] == "else" {
+			if seenElse {
+				p.error(p.position(), "VRB0411", "match has more than one else branch", "keep a single final else branch")
+			}
+			seenElse = true
+			p.index++
+			statement.Else = p.parseBlock("match else", "branch")
+			continue
+		}
+		if len(caseParts) < 2 || caseParts[0] != "case" {
+			p.error(p.position(), "VRB0412", "match body only accepts case, else, or end", "example: case admin")
+			p.index++
+			continue
+		}
+		if seenElse {
+			p.error(p.position(), "VRB0413", "case cannot appear after match else", "move the else branch after all cases")
+		}
+		patternPos := p.position()
+		pattern := p.parseExpr(caseParts[1:], patternPos)
+		p.index++
+		body := p.parseBlock("match case", strings.Join(caseParts[1:], " "))
+		statement.Cases = append(statement.Cases, ast.MatchCase{Pattern: pattern, Body: body, Pos: patternPos})
+	}
+	p.error(pos, "VRB0414", "match is missing end", "close the match after its cases with end")
+	return statement
 }
 
 func (p *parser) parseExpr(parts []string, pos ast.Position) ast.Expr {

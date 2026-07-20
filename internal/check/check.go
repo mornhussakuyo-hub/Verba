@@ -313,6 +313,26 @@ func (c *Checker) validateStatements(statements []ast.Stmt, local scope, inRoute
 			condition := c.validateExpr(value.Condition, local, expectedReturn)
 			c.requireAssignable(value.Pos, boolType, condition, "while condition")
 			c.validateStatements(value.Body, cloneScope(local), inRoute, expectedReturn)
+		case *ast.MatchStmt:
+			matchedType := c.validateExpr(value.Value, local, nil)
+			if !c.isMatchable(matchedType) {
+				c.error(value.Pos, "VRB1450", fmt.Sprintf("match value type %s is not comparable", matchedType.String()), "match a scalar or enum value")
+			}
+			seen := map[string]bool{}
+			for _, matchCase := range value.Cases {
+				patternType := c.validateExpr(matchCase.Pattern, local, &matchedType)
+				c.requireAssignable(matchCase.Pos, matchedType, patternType, "match case")
+				if matchCase.Pattern.Kind != ast.ExprAtom {
+					c.error(matchCase.Pos, "VRB1451", "match case must be a literal or enum case", "bind computed values before match and use constant case patterns")
+				}
+				key := matchCase.Pattern.Value
+				if seen[key] {
+					c.error(matchCase.Pos, "VRB1452", fmt.Sprintf("duplicate match case %s", key), "remove the duplicate case")
+				}
+				seen[key] = true
+				c.validateStatements(matchCase.Body, cloneScope(local), inRoute, expectedReturn)
+			}
+			c.validateStatements(value.Else, cloneScope(local), inRoute, expectedReturn)
 		case *ast.TransactionStmt:
 			c.validateStatements(value.Body, cloneScope(local), inRoute, expectedReturn)
 		}
@@ -729,6 +749,18 @@ func (c *Checker) isComparable(value ast.Type) bool {
 	}
 }
 
+func (c *Checker) isMatchable(value ast.Type) bool {
+	if !c.isComparable(value) {
+		return false
+	}
+	switch value.Name {
+	case "bytes", "optional", "time":
+		return false
+	default:
+		return true
+	}
+}
+
 func (c *Checker) validateSQLCall(expr ast.Expr) {
 	if len(expr.Args) == 0 {
 		return
@@ -819,6 +851,16 @@ func blockTerminates(statements []ast.Stmt) bool {
 		return true
 	case *ast.IfStmt:
 		return len(value.Else) > 0 && blockTerminates(value.Then) && blockTerminates(value.Else)
+	case *ast.MatchStmt:
+		if len(value.Else) == 0 || !blockTerminates(value.Else) {
+			return false
+		}
+		for _, matchCase := range value.Cases {
+			if !blockTerminates(matchCase.Body) {
+				return false
+			}
+		}
+		return len(value.Cases) > 0
 	default:
 		return false
 	}

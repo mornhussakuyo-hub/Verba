@@ -91,6 +91,13 @@ func (e *emitter) validateStatements(statements []ast.Stmt) {
 		case *ast.WhileStmt:
 			e.validateExpr(value.Condition)
 			e.validateStatements(value.Body)
+		case *ast.MatchStmt:
+			e.validateExpr(value.Value)
+			for _, matchCase := range value.Cases {
+				e.validateExpr(matchCase.Pattern)
+				e.validateStatements(matchCase.Body)
+			}
+			e.validateStatements(value.Else)
 		case *ast.TransactionStmt:
 			e.error(value.Pos, "VRB3001", "transaction code generation is not available in v0.1.0", "use verba check for SQL validation; database drivers arrive in the next runtime milestone")
 		}
@@ -309,6 +316,17 @@ func (e *emitter) emitStatements(statements []ast.Stmt, indent int, output *ast.
 		case *ast.WhileStmt:
 			e.line(indent, "for %s {", e.expr(value.Condition))
 			e.emitStatements(value.Body, indent+1, output, inRoute)
+			e.line(indent, "}")
+		case *ast.MatchStmt:
+			e.line(indent, "switch %s {", e.expr(value.Value))
+			for _, matchCase := range value.Cases {
+				e.line(indent, "case %s:", e.expr(matchCase.Pattern))
+				e.emitStatements(matchCase.Body, indent+1, output, inRoute)
+			}
+			if len(value.Else) > 0 {
+				e.line(indent, "default:")
+				e.emitStatements(value.Else, indent+1, output, inRoute)
+			}
 			e.line(indent, "}")
 		}
 	}
@@ -579,6 +597,16 @@ func blockTerminates(statements []ast.Stmt) bool {
 		return true
 	case *ast.IfStmt:
 		return len(value.Else) > 0 && blockTerminates(value.Then) && blockTerminates(value.Else)
+	case *ast.MatchStmt:
+		if len(value.Else) == 0 || !blockTerminates(value.Else) {
+			return false
+		}
+		for _, matchCase := range value.Cases {
+			if !blockTerminates(matchCase.Body) {
+				return false
+			}
+		}
+		return len(value.Cases) > 0
 	default:
 		return false
 	}

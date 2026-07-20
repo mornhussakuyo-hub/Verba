@@ -17,6 +17,27 @@ begin
     case member
 end
 
+function role_label
+input value role
+output string
+begin
+    match value
+    begin
+        case admin
+        begin
+            return text administrator
+        end
+        case member
+        begin
+            return text member
+        end
+        else
+        begin
+            return text unknown
+        end
+    end
+end
+
 function visible_name
 input value user
 output string
