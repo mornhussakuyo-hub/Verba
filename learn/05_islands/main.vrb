@@ -1,0 +1,38 @@
+module islands
+
+use http
+use json
+
+embed json metadata until end_metadata
+{
+  "name": "Verba islands",
+  "safe": true
+}
+end_metadata
+
+embed regex username_pattern until end_username_pattern
+^[a-z][a-z0-9_]{2,15}$
+end_username_pattern
+
+embed html welcome_page until end_welcome_page
+<main><h1>{{ title }}</h1><p>{{ body }}</p></main>
+end_welcome_page
+
+function valid_username
+input value string
+output bool
+begin
+    return call regex_match username_pattern value
+end
+
+route page
+method get
+path /
+begin
+    let rendered to be call render welcome_page
+    begin
+        with title text Verba
+        with body text Templates escape dynamic values
+    end
+    respond text 200 rendered
+end

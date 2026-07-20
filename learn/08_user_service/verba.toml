@@ -1,0 +1,7 @@
+name = "user_service"
+version = "0.1.0"
+target = "go"
+
+[database]
+dialect = "postgres"
+schema = "schema.sql"

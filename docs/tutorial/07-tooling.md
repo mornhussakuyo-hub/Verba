@@ -1,0 +1,85 @@
+# 7. 工具链与排错
+
+Verba 把检查、格式化、生成和构建统一到一个命令中。
+
+## Check
+
+```powershell
+verba check path/to/project
+```
+
+`check` 递归发现 `.vrb` 文件，然后执行解析、名称解析、类型检查和语法岛验证。目录中的所有文件会被视为同一个模块，因此每个独立项目应分别检查。
+
+诊断包含稳定编号、文件、行列、问题说明和修复提示：
+
+```text
+main.vrb:8:1: error VRB1422: argument value requires string but received int
+  hint: use a value with the expected type; Verba does not apply implicit conversions
+```
+
+核心 lexer 会在进入 parser 前拒绝核心区标点和畸形数字。例如 `module bad-name` 报告 `VRB0601`，`let value to be 1.2.3` 报告 `VRB0602`。如果符号本来属于内容，请使用 `text`、`url`、`path` 或语法岛明确边界。
+
+## Fmt
+
+```powershell
+verba fmt path/to/project
+verba fmt --check path/to/project
+verba fmt --stdout path/to/main.vrb
+```
+
+- 默认模式就地格式化。
+- `--check` 不修改文件，适合 CI。
+- `--stdout` 只接受一个源文件。
+- 语法岛原始内容默认保持不变。
+
+格式化器是幂等的：连续执行两次不会产生第二次变化。
+
+## Build
+
+```powershell
+verba build -o build/server.exe path/to/project
+verba build --emit-go build/server.generated.go path/to/project
+```
+
+`build` 先完成所有前端检查，再生成格式化后的 Go 源码并调用 `go build`。`--emit-go` 便于学习生成结果和报告编译器问题。
+
+## Run
+
+```powershell
+verba run path/to/project
+verba run path/to/project -- argument1 argument2
+```
+
+`run` 在临时目录构建程序，前台运行，并把 `--` 后的值传给生成程序。
+
+## Audit
+
+```powershell
+verba audit learn/04_http
+verba audit --json learn/04_http
+```
+
+`audit` 列出项目声明且实际解析成功的 HTTP、JSON、UUID、time、SQL 和高风险显式能力，以及清单依赖是否被 `use`。普通输出适合人工审查，JSON 输出适合 CI、容器权限生成和安全策略工具。
+
+路由会要求 `use http`，JSON 编解码或响应会要求 `use json`，UUID API/类型会要求 `use uuid`，SQL 资源与事务会要求 `use sql postgres`。这使权限声明不是装饰性注释，而是编译条件。
+
+## 常见问题
+
+### Duplicate declaration
+
+如果一次检查多个独立教程目录，重复的函数或路由名会被合并到同一模块。请分别对每个项目运行 `check`。
+
+### Port already in use
+
+设置不同监听地址：
+
+```powershell
+$env:VERBA_ADDRESS = "127.0.0.1:9090"
+verba run learn/04_http
+```
+
+### Go backend failed
+
+先运行 `verba check`。如果合法程序仍产生无效 Go，请使用 `--emit-go` 保存生成源码，并在 issue 中附上 Verba 源码、诊断和版本号。
+
+下一章：[项目清单](08-project-manifest.md)。

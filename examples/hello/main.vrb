@@ -1,0 +1,40 @@
+module hello
+
+use http
+use json
+
+record greeting
+begin
+    field message string
+end
+
+embed json service_metadata until end_service_metadata
+{
+  "name": "Verba hello",
+  "version": "0.1.0"
+}
+end_service_metadata
+
+function normalize_name
+input value string
+output string
+begin
+    let trimmed to be call trim value
+    let normalized to be call lowercase trimmed
+    return normalized
+end
+
+route health
+method get
+path /health
+begin
+    respond text 200 Verba is healthy
+end
+
+route greet
+method get
+path /greet/{name}
+begin
+    let normalized to be call normalize_name name
+    respond json 200 normalized
+end

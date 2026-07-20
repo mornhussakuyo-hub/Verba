@@ -1,0 +1,41 @@
+# Verba 入门教程
+
+这套教程面向第一次接触 Verba、编译器或后端开发的读者。章节按学习顺序排列，每一章只引入少量新概念，并给出可以直接运行或检查的示例。
+
+## 学习路线
+
+1. [安装与环境](01-installation.md)：构建 `verba` 命令并确认环境。
+2. [第一个 Verba 程序](02-first-program.md)：理解模块、能力、路由与代码块。
+3. [语言基础](03-language-basics.md)：变量、字面量、调用和控制流。
+4. [函数与类型](04-functions-and-types.md)：record、enum、optional 与 result。
+5. [HTTP 服务](05-http-service.md)：路径参数、请求数据和响应。
+6. [语法岛](06-syntax-islands.md)：JSON、Regex、HTML、Text 与 SQL。
+7. [工具链与排错](07-tooling.md)：check、fmt、build、run 和诊断。
+8. [项目清单](08-project-manifest.md)：项目身份、构建目标、数据库和依赖元数据。
+9. [数值类型与精确小数](09-numeric-types.md)：整数范围、上下文常量、浮点数和 decimal。
+10. [PostgreSQL](10-postgresql.md)：schema 快照、类型化查询、结果行和事务。
+11. [完整用户服务](11-user-service.md)：组合 HTTP、JSON、UUID、正则、PostgreSQL 与类型化路由错误。
+
+## 约定
+
+- Verba 源文件扩展名是 `.vrb`。
+- 示例命令默认在仓库根目录运行。
+- Windows 示例使用 PowerShell；Linux 和 macOS 将 `verba.exe` 换成 `verba`。
+- 每个示例目录是一个独立项目。不要把多个使用相同模块名或声明名的教程目录一次性交给 `verba check`。
+
+## 一分钟体验
+
+```powershell
+go build -o build/verba.exe ./cmd/verba
+./build/verba.exe check learn/01_hello
+./build/verba.exe run learn/01_hello
+```
+
+另开一个终端：
+
+```powershell
+curl http://127.0.0.1:8080/
+curl http://127.0.0.1:8080/hello/Alice
+```
+
+下一步从[安装与环境](01-installation.md)开始。

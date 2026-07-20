@@ -1,0 +1,27 @@
+module basics
+
+use http
+
+function classify
+input count int
+output string
+begin
+    let positive to be call greater_than count 0
+
+    if positive
+    begin
+        return text positive
+    end
+    else
+    begin
+        return text zero_or_negative
+    end
+end
+
+route summary
+method get
+path /
+begin
+    let result to be call classify 3
+    respond text 200 result
+end

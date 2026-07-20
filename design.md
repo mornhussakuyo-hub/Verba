@@ -363,7 +363,7 @@ end
 | 结构           | record enum                                                     |
 | 构造类型       | optional T  list T  map K V  result T E                         |
 
-decimal 用于金额等需要十进制定点语义的场景；float 不应用于货币。uuid、time、duration、url、path 是强类型值，而不是字符串别名。
+int 与 uint 固定为 64 位，不随编译器宿主或目标架构变化。decimal 用于金额等需要精确十进制语义的场景；字面量和运算使用任意精度有理数，不经过二进制浮点。有限十进制可以无损编解码为 JSON number；除法产生的非终止十进制必须显式处理，不能静默舍入。float 不应用于货币。uuid、time、duration、url、path 是强类型值，而不是字符串别名。
 
 ## 6.2 无隐式 null
 
@@ -503,6 +503,8 @@ respond empty 204
 ```
 
 respond 是终止语句。响应格式、状态码和主体类型在编译期检查。框架可以为 record 自动生成 JSON 编码器；字符串不会被误当作 JSON。
+
+带有 `output result T E` 的路由同时也是类型化 HTTP 错误边界。`return call ok value` 默认生成 `200` JSON 响应，显式 `respond` 可以选择其他成功状态；`return call error value` 和 `try` 传播的错误由编译器统一映射。MVP 采用按错误 case 名称确定的稳定约定：`invalid_request` 与 `invalid_email` 映射为 `400`，`user_not_found` 映射为 `404`，`database_failure` 以及未列出的 case 映射为 `500`。`json_decode` 与 `parse_uuid` 的字符串错误只有在目标错误枚举声明 `invalid_request` 时才能自动转换，否则类型检查失败。后续版本可以增加显式状态元数据，但不得改变这套 MVP 默认值。
 
 ## 8.4 JSON 的日常使用不需要原始岛
 
