@@ -100,19 +100,44 @@ respond json 200 user_value
 
 ## 连接 PostgreSQL
 
-生成的服务启动时读取 `VERBA_DATABASE_URL` 并验证连接：
+先设置连接串并应用 schema，再启动生成的服务：
 
 ```powershell
 $env:VERBA_DATABASE_URL = "postgres://postgres:postgres@127.0.0.1:5432/verba?sslmode=disable"
+psql $env:VERBA_DATABASE_URL -f learn/08_user_service/schema.sql
 $env:VERBA_ADDRESS = "127.0.0.1:8080"
 ./build/user-service.exe
 ```
 
-先把 `schema.sql` 应用到数据库，再调用接口：
+保持服务运行，在另一个 PowerShell 终端创建用户，并使用响应中的 ID 立即查询同一个用户：
 
 ```powershell
-curl -Method Post http://127.0.0.1:8080/users -ContentType application/json -Body '{"name":"Alice","email":"alice@example.com"}'
-curl http://127.0.0.1:8080/users/550e8400-e29b-41d4-a716-446655440000
+$created = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/users -ContentType application/json -Body '{"name":"Alice","email":"alice@example.com"}'
+$created
+Invoke-RestMethod -Uri "http://127.0.0.1:8080/users/$($created.id)"
 ```
 
-schema 快照只用于编译期证明，不会自动执行迁移。部署流程必须保证实际数据库与快照一致。
+POST 应返回 201，随后 GET 应返回相同的 `id`、`name` 和 `email`。使用响应 ID 避免了固定 UUID 在空数据库中返回 404 的歧义。
+
+## 验证错误边界
+
+使用 `curl.exe -i` 可以同时看到响应头和状态码：
+
+```powershell
+curl.exe -i -X POST http://127.0.0.1:8080/users -H "Content-Type: application/json" -d '{"name":"Bad Email","email":"not-an-email"}'
+curl.exe -i http://127.0.0.1:8080/users/not-a-uuid
+curl.exe -i http://127.0.0.1:8080/users/00000000-0000-0000-0000-000000000000
+```
+
+三次请求应依次返回 400、400 和 404。数据库不可用或 SQL 执行失败时返回 500；未知的应用错误也只会回落到 500，不会泄漏内部错误文本。
+
+## 完成检查
+
+完成本章后，你应该能够证明：
+
+- `fmt --check`、`check`、`audit` 和 `build` 全部成功。
+- 创建响应为 201，并能用返回的 UUID 查询到同一用户。
+- 非法 email、非法 UUID 和不存在的用户分别得到 400、400 和 404。
+- schema 快照只负责编译期证明，实际数据库仍需要独立迁移。
+
+至此，Verba 0.1.0 的入门路线完成。回到[教程首页](README.md)可以重新选择章节，或运行 `./scripts/verify.ps1` 一次验证全部教程项目。
