@@ -1,0 +1,27 @@
+module hello
+
+use http
+
+function normalize_name
+input value string
+output string
+begin
+    let trimmed to be call trim value
+    let normalized to be call lowercase trimmed
+    return normalized
+end
+
+route hello_world
+method get
+path /
+begin
+    respond text 200 hello_world
+end
+
+route greet
+method get
+path /hello/{name}
+begin
+    let normalized to be call normalize_name name
+    respond json 200 normalized
+end
