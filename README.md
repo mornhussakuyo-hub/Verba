@@ -96,6 +96,12 @@ end
 
 从 [Verba 入门教程](docs/tutorial/README.md) 开始，通过十一个章节学习安装、基础语法、函数与类型、HTTP、语法岛、工具链、项目清单、精确数值、PostgreSQL 和完整用户服务。八个可执行项目位于 `learn/`。
 
+要一次确认所有教程源码都与当前编译器同步，运行：
+
+```powershell
+./scripts/verify.ps1
+```
+
 ## 开发
 
 ```powershell

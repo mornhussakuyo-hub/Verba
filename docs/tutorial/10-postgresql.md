@@ -113,21 +113,32 @@ end
 ./build/verba.exe build -o build/postgres-service.exe learn/07_postgres
 ```
 
-启动程序前设置连接串：
+先把教程 schema 应用到本地数据库，再设置连接串并启动程序：
 
 ```powershell
 $env:VERBA_DATABASE_URL = "postgres://postgres:postgres@127.0.0.1:5432/verba?sslmode=disable"
+psql $env:VERBA_DATABASE_URL -f learn/07_postgres/schema.sql
 ./build/postgres-service.exe
 ```
 
-生成程序通过 `database/sql` 管理连接池，并在启动时 `Ping` 数据库。没有 `VERBA_DATABASE_URL`、连接失败或 schema 与运行数据库漂移时，程序会立即失败，不会带着不可用数据库静默启动。
+生成程序通过 `database/sql` 管理连接池，并在启动时 `Ping` 数据库。没有 `VERBA_DATABASE_URL` 或连接失败时，程序会立即退出。schema 快照不会在启动时与数据库自动比对；发生漂移的查询会在执行时失败，因此部署流程必须单独保证两者一致。
 
-可以用以下请求练习：
+保持服务运行，在另一个 PowerShell 终端创建账户，并保存响应中的随机 UUID：
 
 ```powershell
-curl.exe -X POST http://127.0.0.1:8080/accounts -H "Content-Type: application/json" -d '{"name":"Alice","opening_balance":19.90}'
-curl.exe http://127.0.0.1:8080/accounts/550e8400-e29b-41d4-a716-446655440000
+$created = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/accounts -ContentType application/json -Body '{"name":"Alice","opening_balance":19.90}'
+$created
+Invoke-RestMethod -Uri "http://127.0.0.1:8080/accounts/$($created.id)"
 ```
+
+这样查询的一定是刚创建的账户，而不是依赖数据库中预先存在的固定 UUID。接着用同一个 ID 验证事务更新：
+
+```powershell
+Invoke-RestMethod -Method Put -Uri "http://127.0.0.1:8080/accounts/$($created.id)" -ContentType application/json -Body '{"name":"Alice","opening_balance":25.50}'
+Invoke-RestMethod -Uri "http://127.0.0.1:8080/accounts/$($created.id)"
+```
+
+最后一次查询的 `balance` 应为 `25.5`。PUT 成功时返回 204，因此命令本身没有正文输出。无效 JSON 或 UUID 会返回 400，数据库连接或执行错误会返回 500。
 
 至此，你已经走完 Verba 当前工具链的数据库纵向路径：源码和语法岛经过静态检查，生成可构建的 Go 服务，并在运行时保持 HTTP、JSON、精确数值与 PostgreSQL 的类型边界。
 

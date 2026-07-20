@@ -16,6 +16,28 @@
 10. [PostgreSQL](10-postgresql.md)：schema 快照、类型化查询、结果行和事务。
 11. [完整用户服务](11-user-service.md)：组合 HTTP、JSON、UUID、正则、PostgreSQL 与类型化路由错误。
 
+## 建议学习方式
+
+每一章都按同一个节奏完成：
+
+1. 先阅读对应的 `learn/` 源码，再对照章节中的语法说明。
+2. 运行该章给出的 `fmt --check`、`check` 或 `build` 命令。
+3. 对 HTTP 项目实际启动服务，并执行章节中的请求。
+4. 修改一个字面量、类型或参数，观察诊断后再恢复源码。
+
+教程中的八个项目形成一条递进路线：
+
+| 项目 | 对应章节 | 完成标志 |
+| --- | --- | --- |
+| `learn/01_hello` | 1–2 | 能启动服务并访问两个 GET 路由 |
+| `learn/02_basics` | 3 | 能解释绑定、调用和控制流的检查规则 |
+| `learn/03_types` | 4 | 能使用 record、enum、optional 和 result |
+| `learn/04_http` | 5 | 能发送路径参数和 JSON 请求，并理解错误状态 |
+| `learn/05_islands` | 6 | 能检查并渲染 JSON、Regex、HTML 与 Text 岛 |
+| `learn/06_numeric` | 9 | 能区分整数、浮点数和精确 decimal |
+| `learn/07_postgres` | 8、10 | 能创建、查询并更新同一条数据库记录 |
+| `learn/08_user_service` | 11 | 能验证 201、200、400、404，并理解 500 错误边界 |
+
 ## 约定
 
 - Verba 源文件扩展名是 `.vrb`。
@@ -37,5 +59,17 @@ go build -o build/verba.exe ./cmd/verba
 curl http://127.0.0.1:8080/
 curl http://127.0.0.1:8080/hello/Alice
 ```
+
+回到运行服务的终端按 `Ctrl+C` 停止进程。
+
+## 一次验证全部教程
+
+仓库的验证脚本会格式检查、静态检查、审计并构建八个教程项目；数据库项目只在运行时需要 PostgreSQL：
+
+```powershell
+./scripts/verify.ps1
+```
+
+脚本最后输出 `Verba verification completed` 即表示所有教程源码都通过当前工具链。CI 会在 Windows 和 Ubuntu 上运行同一脚本，因此章节中的项目始终与编译器同步。
 
 下一步从[安装与环境](01-installation.md)开始。
