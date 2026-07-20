@@ -30,6 +30,8 @@ embed regex username_pattern until end_pattern
 end_pattern
 ```
 
+终止标识符必须与声明中的名称完全相同、顶格且独占一行。岛内内容不会经过核心 lexer；其中的括号、引号、冒号或看似 Verba 的单词都不会改变外层结构。`verba fmt` 也会逐字节保留岛内正文。
+
 正则会在编译期验证并在生成程序启动时预编译。调用时复用编译结果：
 
 ```verba

@@ -17,6 +17,8 @@ main.vrb:8:1: error VRB1422: argument value requires string but received int
   hint: use a value with the expected type; Verba does not apply implicit conversions
 ```
 
+核心 lexer 会在进入 parser 前拒绝核心区标点和畸形数字。例如 `module bad-name` 报告 `VRB0601`，`let value to be 1.2.3` 报告 `VRB0602`。如果符号本来属于内容，请使用 `text`、`url`、`path` 或语法岛明确边界。
+
 ## Fmt
 
 ```powershell

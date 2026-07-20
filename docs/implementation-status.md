@@ -13,9 +13,9 @@ The current work focuses on a typed semantic pipeline before expanding the runti
 | Stage | Status | Remaining work |
 | --- | --- | --- |
 | Source manager | Partial | UTF-8/BOM validation, stable file IDs, byte offsets, and Unicode line maps work; full spans and imported module sources remain |
-| Region scanner | Partial | Dedicated core/literal/island regions and byte-accurate island spans |
-| Core lexer | Missing | Tokens, keyword classification, numeric validation, recovery |
-| Parser | Partial | Typed route inputs, richer literals, and broader recovery coverage |
+| Region scanner | Implemented | Core spans, exact island terminators, byte-preserved raw content, and missing-terminator diagnostics are active in parsing and formatting |
+| Core lexer | Partial | Keywords, identifiers, numeric syntax, newlines, controlled literals, and island exclusion work; parser token consumption and broader recovery remain |
+| Parser | Partial | Uses scanned island regions and lexer diagnostics; typed route inputs, richer literals, token-driven parsing, and broader recovery remain |
 | Name resolver | Partial | Typed local scopes exist; modules, imports, case ambiguity, references remain |
 | Type checker | In progress | Numeric constants, complete builtin signatures, control-flow joins, SQL result types |
 | Island registry | Partial | JSON and SQL binding checks, compiled regexes, and checked HTML/text slots exist; SQL schema metadata and richer island parsers remain |

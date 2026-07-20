@@ -7,6 +7,8 @@ import (
 
 	"github.com/verba-lang/verba/internal/ast"
 	"github.com/verba-lang/verba/internal/diagnostic"
+	"github.com/verba-lang/verba/internal/lexer"
+	"github.com/verba-lang/verba/internal/region"
 	"github.com/verba-lang/verba/internal/source"
 )
 
@@ -20,6 +22,7 @@ type sourceLine struct {
 type parser struct {
 	path        string
 	source      *source.File
+	regions     region.Result
 	lines       []sourceLine
 	index       int
 	diagnostics []diagnostic.Diagnostic
@@ -35,7 +38,11 @@ func Parse(path string, content []byte) (*ast.File, []diagnostic.Diagnostic) {
 }
 
 func ParseFile(file *source.File) (*ast.File, []diagnostic.Diagnostic) {
-	p := &parser{path: file.Path, source: file}
+	regions := region.Scan(file)
+	lexed := lexer.Lex(file, regions)
+	p := &parser{path: file.Path, source: file, regions: regions}
+	p.diagnostics = append(p.diagnostics, regions.Diagnostics...)
+	p.diagnostics = append(p.diagnostics, lexed.Diagnostics...)
 	for _, line := range file.Lines() {
 		raw := file.LineText(line)
 		p.lines = append(p.lines, sourceLine{number: line.Number, offset: line.Start, raw: raw, text: strings.TrimSpace(raw)})
@@ -269,19 +276,19 @@ func (p *parser) parseEmbed(parts []string) ast.Decl {
 		return nil
 	}
 	embed := &ast.Embed{Kind: parts[1], Name: parts[2], Terminator: parts[4], Pos: pos}
-	p.index++
-	var raw []string
-	for !p.done() {
-		if p.current().text == embed.Terminator && strings.TrimSpace(p.current().raw) == embed.Terminator {
-			embed.Raw = strings.Join(raw, "\n")
-			p.index++
-			return embed
-		}
-		raw = append(raw, p.current().raw)
+	island, ok := p.regions.IslandAtHeader(pos.Line)
+	if !ok {
 		p.index++
+		return embed
 	}
-	p.error(pos, "VRB0242", fmt.Sprintf("embed %s is missing terminator %s", embed.Name, embed.Terminator), "the terminator must appear alone on a line")
-	embed.Raw = strings.Join(raw, "\n")
+	embed.RawStart = island.Content.Start
+	embed.RawEnd = island.Content.End
+	embed.Raw = string(p.source.Slice(embed.RawStart, embed.RawEnd))
+	if island.Terminated {
+		p.index = island.TerminatorLine
+	} else {
+		p.index = len(p.lines)
+	}
 	return embed
 }
 

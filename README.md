@@ -103,7 +103,9 @@ go vet ./...
 cmd/verba              CLI 入口
 internal/source        UTF-8 源文件、字节偏移与行列映射
 internal/manifest      TOML 项目清单发现与验证
-internal/parser        行导向解析器与语法岛扫描
+internal/region        核心区与原始语法岛的字节边界扫描
+internal/lexer         核心 token、数值和受控字面量词法检查
+internal/parser        行导向语法与 AST 构建
 internal/check         名称、类型、作用域和适配器检查
 internal/format        幂等格式化器
 internal/emitgo        Go 后端

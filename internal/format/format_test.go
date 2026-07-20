@@ -18,6 +18,24 @@ func TestSourceIsIdempotentAndPreservesIsland(t *testing.T) {
 	}
 }
 
+func TestSourcePreservesIslandBytes(t *testing.T) {
+	input := []byte("module   demo\r\n\r\nembed text message until done\r\nfirst  \r\nsecond\r\ndone\r\n")
+	want := []byte("module demo\n\nembed text message until done\nfirst  \r\nsecond\ndone\n")
+	formatted := Source(input)
+	if !bytes.Equal(formatted, want) {
+		t.Fatalf("Source() = %q, want %q", formatted, want)
+	}
+}
+
+func TestSourcePreservesControlledLiteralWhitespace(t *testing.T) {
+	input := []byte("module demo\nfunction message\noutput string\nbegin\n  return   text   hello,  world!  \nend\n")
+	want := []byte("module demo\nfunction message\noutput string\nbegin\n    return text hello,  world!  \nend\n")
+	formatted := Source(input)
+	if !bytes.Equal(formatted, want) {
+		t.Fatalf("Source() = %q, want %q", formatted, want)
+	}
+}
+
 func TestHelloExampleIsFormatted(t *testing.T) {
 	source, err := os.ReadFile("../../examples/hello/main.vrb")
 	if err != nil {

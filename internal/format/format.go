@@ -1,36 +1,38 @@
 package format
 
 import (
+	"bytes"
 	"strings"
+
+	"github.com/verba-lang/verba/internal/lexer"
+	"github.com/verba-lang/verba/internal/region"
+	"github.com/verba-lang/verba/internal/source"
 )
 
-func Source(source []byte) []byte {
-	text := strings.ReplaceAll(string(source), "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
-	lines := strings.Split(text, "\n")
-	result := make([]string, 0, len(lines))
+func Source(content []byte) []byte {
+	file, _ := source.New("<format>", content)
+	regions := region.Scan(file)
+	lines := file.Lines()
+	var result bytes.Buffer
 	indent := 0
-	inIsland := false
-	terminator := ""
-	lastBlank := false
+	pendingBlank := false
 
-	for _, raw := range lines {
-		trimmed := strings.TrimSpace(raw)
-		if inIsland {
-			if trimmed == terminator && strings.TrimSpace(raw) == terminator {
-				result = append(result, terminator)
-				inIsland = false
-				terminator = ""
-				lastBlank = false
-			} else {
-				result = append(result, strings.TrimRight(raw, " \t"))
-			}
-			continue
+	writeLine := func(value string) {
+		if pendingBlank && result.Len() > 0 {
+			result.WriteByte('\n')
 		}
+		pendingBlank = false
+		result.WriteString(value)
+		result.WriteByte('\n')
+	}
+
+	for index := 0; index < len(lines); index++ {
+		lineInfo := lines[index]
+		raw := file.LineText(lineInfo)
+		trimmed := strings.TrimSpace(raw)
 		if trimmed == "" {
-			if len(result) > 0 && !lastBlank {
-				result = append(result, "")
-				lastBlank = true
+			if result.Len() > 0 {
+				pendingBlank = true
 			}
 			continue
 		}
@@ -39,38 +41,41 @@ func Source(source []byte) []byte {
 		if len(fields) > 0 && fields[0] == "end" && indent > 0 {
 			indent--
 		}
-		line := normalizeCoreLine(trimmed)
-		result = append(result, strings.Repeat("    ", indent)+line)
-		lastBlank = false
+		line := normalizeCoreLine(strings.TrimLeft(raw, " \t"))
+		writeLine(strings.Repeat("    ", indent) + line)
 
-		if len(fields) > 0 && fields[0] == "embed" && len(fields) == 5 && fields[3] == "until" {
-			inIsland = true
-			terminator = fields[4]
+		if island, ok := regions.IslandAtHeader(lineInfo.Number); ok {
+			rawIsland := file.Slice(island.Content.Start, island.Content.End)
+			if len(rawIsland) > 0 {
+				result.Write(rawIsland)
+				result.WriteByte('\n')
+			}
+			if island.Terminated {
+				writeLine(island.Terminator)
+				index = island.TerminatorLine - 1
+			} else {
+				return result.Bytes()
+			}
 			continue
 		}
 		if trimmed == "begin" {
 			indent++
 		}
 	}
-	for len(result) > 0 && result[len(result)-1] == "" {
-		result = result[:len(result)-1]
-	}
-	return []byte(strings.Join(result, "\n") + "\n")
+	return result.Bytes()
 }
 
 func normalizeCoreLine(line string) string {
+	if prefix, literal, _, ok := lexer.SplitControlled(line); ok {
+		result := strings.Join(strings.Fields(prefix), " ")
+		if literal != "" {
+			result += " " + literal
+		}
+		return result
+	}
 	fields := strings.Fields(line)
 	if len(fields) == 0 {
 		return ""
-	}
-	switch fields[0] {
-	case "note":
-		if len(fields) == 1 {
-			return "note"
-		}
-		return "note " + strings.TrimSpace(strings.TrimPrefix(line, "note"))
-	case "path":
-		return "path " + strings.TrimSpace(strings.TrimPrefix(line, "path"))
 	}
 	return strings.Join(fields, " ")
 }

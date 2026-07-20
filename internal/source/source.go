@@ -117,6 +117,12 @@ func (file *File) Len() int {
 	return len(file.content)
 }
 
+func (file *File) Slice(start, end int) []byte {
+	start = min(max(start, 0), len(file.content))
+	end = min(max(end, start), len(file.content))
+	return append([]byte(nil), file.content[start:end]...)
+}
+
 func (file *File) LineText(line Line) string {
 	if line.Start < 0 || line.End < line.Start || line.End > len(file.content) {
 		return ""

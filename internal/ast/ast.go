@@ -76,6 +76,8 @@ type Embed struct {
 	Name       string
 	Terminator string
 	Raw        string
+	RawStart   int
+	RawEnd     int
 	Pos        Position
 }
 

@@ -72,3 +72,15 @@ end
 		t.Fatalf("unexpected match statement: %#v", function.Body[0])
 	}
 }
+
+func TestParseIslandPreservesOriginalNewlinesAndOffsets(t *testing.T) {
+	source := []byte("module example\r\nembed text message until done\r\nfirst\r\nsecond\r\ndone\r\n")
+	file, diagnostics := Parse("island.vrb", source)
+	if len(diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", diagnostics)
+	}
+	embed := file.Decls[0].(*ast.Embed)
+	if embed.Raw != "first\r\nsecond" || embed.RawStart <= embed.Pos.Offset || embed.RawEnd-embed.RawStart != len(embed.Raw) {
+		t.Fatalf("unexpected embed: %#v", embed)
+	}
+}
