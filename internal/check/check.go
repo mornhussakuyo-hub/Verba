@@ -187,6 +187,9 @@ func (c *Checker) validateRoute(route *ast.Route) {
 	}
 	if route.Output != nil {
 		c.validateType(*route.Output, route.Pos)
+		if route.Output.Name != "result" || len(route.Output.Args) != 2 {
+			c.error(route.Pos, "VRB1134", fmt.Sprintf("route %s output must be result T E", route.Name), "declare a result output so the HTTP boundary can map success and error values")
+		}
 	}
 	local := scope{
 		"request_body":    {typeValue: bytesType},
@@ -198,7 +201,7 @@ func (c *Checker) validateRoute(route *ast.Route) {
 	}
 	previousBoundary := c.routeBoundary
 	c.routeBoundary = true
-	c.validateStatements(route.Body, local, true, nil)
+	c.validateStatements(route.Body, local, true, route.Output)
 	c.routeBoundary = previousBoundary
 }
 
@@ -518,6 +521,7 @@ func (c *Checker) validateCall(expr *ast.Expr, local scope, expected *ast.Type) 
 				c.requireAssignable(arg.Pos, input.Type, argType, fmt.Sprintf("argument %s", input.Name))
 			}
 		}
+		expr.CallResultType = result
 		return c.applyTry(expr, result, expected)
 	}
 	b, exists := builtins[expr.Value]
@@ -549,6 +553,7 @@ func (c *Checker) validateCall(expr *ast.Expr, local scope, expected *ast.Type) 
 		c.error(expr.Pos, "VRB1417", fmt.Sprintf("standard function %s does not accept a named argument block", expr.Value), "use positional arguments for this function")
 	}
 	result := c.validateBuiltin(expr, local, expected)
+	expr.CallResultType = result
 	return c.applyTry(expr, result, expected)
 }
 
@@ -873,17 +878,31 @@ func (c *Checker) applyTry(expr *ast.Expr, result ast.Type, expected *ast.Type) 
 		c.error(expr.Pos, "VRB1435", fmt.Sprintf("try requires result T E but call %s returns %s", expr.Value, result.String()), "remove try or call a function that returns result")
 		return unknownType
 	}
-	if c.routeBoundary {
+	if c.routeBoundary && expected == nil {
 		return result.Args[0]
 	}
 	if expected == nil || expected.Name != "result" || len(expected.Args) != 2 {
 		c.error(expr.Pos, "VRB1436", "try can only be used in a function or route returning result T E", "declare a compatible result output type or handle the error explicitly")
 		return result.Args[0]
 	}
+	if c.routeBoundary && canMapRequestFailure(expr.Value, result.Args[1], expected.Args[1], c.enumCases) {
+		return result.Args[0]
+	}
 	if !sameType(result.Args[1], expected.Args[1]) && !isUnknown(result.Args[1]) && !isUnknown(expected.Args[1]) {
 		c.error(expr.Pos, "VRB1437", fmt.Sprintf("try error type %s does not match enclosing error type %s", result.Args[1].String(), expected.Args[1].String()), "map the error to the enclosing result error type")
 	}
 	return result.Args[0]
+}
+
+func canMapRequestFailure(call string, source, target ast.Type, enumCases map[string]ast.Type) bool {
+	if call != "json_decode" && call != "parse_uuid" {
+		return false
+	}
+	if !sameType(source, stringType) || sameType(target, stringType) {
+		return false
+	}
+	invalidRequest, exists := enumCases["invalid_request"]
+	return exists && sameType(invalidRequest, target)
 }
 
 func (c *Checker) resolveFieldPath(pos ast.Position, root ast.Type, path []string) ast.Type {

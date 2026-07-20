@@ -18,6 +18,7 @@ type emitter struct {
 	buffer      bytes.Buffer
 	diagnostics []diagnostic.Diagnostic
 	enumCases   map[string]string
+	enums       map[string]*ast.Enum
 	functions   map[string]*ast.Function
 	records     map[string]*ast.Record
 	embeds      map[string]*ast.Embed
@@ -44,11 +45,12 @@ type featureSet struct {
 }
 
 func Files(files []*ast.File) ([]byte, []diagnostic.Diagnostic) {
-	e := &emitter{files: files, enumCases: map[string]string{}, functions: map[string]*ast.Function{}, records: map[string]*ast.Record{}, embeds: map[string]*ast.Embed{}}
+	e := &emitter{files: files, enumCases: map[string]string{}, enums: map[string]*ast.Enum{}, functions: map[string]*ast.Function{}, records: map[string]*ast.Record{}, embeds: map[string]*ast.Embed{}}
 	for _, file := range files {
 		for _, decl := range file.Decls {
 			switch value := decl.(type) {
 			case *ast.Enum:
+				e.enums[value.Name] = value
 				for _, item := range value.Cases {
 					e.enumCases[item.Name] = exported(value.Name) + exported(item.Name)
 				}
@@ -82,6 +84,9 @@ func (e *emitter) validateSupported() {
 			case *ast.Function:
 				e.validateStatements(value.Body)
 			case *ast.Route:
+				if value.Output != nil && (value.Output.Name != "result" || len(value.Output.Args) != 2) {
+					e.error(value.Pos, "VRB3003", "route output metadata is not a result type", "run verba check and fix the route output before generating Go")
+				}
 				e.validateStatements(value.Body)
 			}
 		}
@@ -161,6 +166,7 @@ func (e *emitter) scanFeatures() {
 			case *ast.Route:
 				if value.Output != nil {
 					e.scanType(*value.Output)
+					e.features.json = true
 				}
 				e.scanStatements(value.Body)
 			case *ast.Embed:
@@ -766,8 +772,30 @@ func (e *emitter) emitRoute(route *ast.Route) {
 	for _, parameter := range routeParameters(route.Path) {
 		e.line(1, "%s := r.PathValue(%s)", safeName(parameter), strconv.Quote(parameter))
 	}
-	e.emitStatements(route.Body, 1, route.Output, true)
-	if !blockTerminates(route.Body) {
+	if route.Output == nil {
+		e.emitStatements(route.Body, 1, nil, true)
+		if !blockTerminates(route.Body) {
+			e.line(1, "w.WriteHeader(http.StatusNoContent)")
+		}
+	} else {
+		typeName := goType(*route.Output)
+		e.line(1, "verbaRouteResponded := false")
+		e.line(1, "verbaRouteReturned := false")
+		e.line(1, "verbaRouteResult := func() %s {", typeName)
+		e.emitStatements(route.Body, 2, route.Output, true)
+		if !blockTerminates(route.Body) {
+			e.line(2, "return %s{}", typeName)
+		}
+		e.line(1, "}()")
+		e.line(1, "if verbaRouteResult.Err != nil {")
+		e.emitRouteError("*verbaRouteResult.Err", route.Output.Args[1], 2)
+		e.line(2, "return")
+		e.line(1, "}")
+		e.line(1, "if verbaRouteResponded { return }")
+		e.line(1, "if verbaRouteReturned {")
+		response := &ast.RespondStmt{Format: "json", Status: httpStatusOK, Value: &ast.Expr{Kind: ast.ExprAtom, Value: "verbaRouteResult.Value"}}
+		e.emitRespond(response, 2, nil, true)
+		e.line(1, "}")
 		e.line(1, "w.WriteHeader(http.StatusNoContent)")
 	}
 	e.line(0, "}")
@@ -784,7 +812,7 @@ func (e *emitter) emitStatements(statements []ast.Stmt, indent int, output *ast.
 				expr.Try = false
 				e.line(indent, "%s := %s", tmp, e.expr(expr))
 				e.line(indent, "if %s.Err != nil {", tmp)
-				e.emitTryFailure(tmp, indent+1, output, inRoute)
+				e.emitTryFailure(tmp, value.Value, indent+1, output, inRoute)
 				e.line(indent, "}")
 				e.line(indent, "%s := %s.Value", safeName(value.Name), tmp)
 				e.line(indent, "_ = %s", safeName(value.Name))
@@ -809,21 +837,24 @@ func (e *emitter) emitStatements(statements []ast.Stmt, indent int, output *ast.
 				expr.Try = false
 				e.line(indent, "%s := %s", tmp, e.expr(expr))
 				e.line(indent, "if %s.Err != nil {", tmp)
-				e.emitTryFailure(tmp, indent+1, output, inRoute)
+				e.emitTryFailure(tmp, value.Value, indent+1, output, inRoute)
 				e.line(indent, "}")
 			} else {
 				e.line(indent, "%s", e.expr(value.Value))
 			}
 		case *ast.ReturnStmt:
+			if inRoute && output != nil {
+				e.line(indent, "verbaRouteReturned = true")
+			}
 			if value.Value == nil {
-				e.line(indent, "return")
+				e.emitReturn(indent, output, inRoute)
 			} else if output != nil && output.Name == "result" && value.Value.Kind == ast.ExprCall && (value.Value.Value == "ok" || value.Value.Value == "error") {
 				e.emitResultReturn(*value.Value, *output, indent)
 			} else {
 				e.line(indent, "return %s", e.expr(*value.Value))
 			}
 		case *ast.RespondStmt:
-			e.emitRespond(value, indent)
+			e.emitRespond(value, indent, output, inRoute)
 		case *ast.IfStmt:
 			e.line(indent, "if %s {", e.expr(value.Condition))
 			e.emitStatements(value.Then, indent+1, output, inRoute)
@@ -875,12 +906,24 @@ func (e *emitter) emitStatements(statements []ast.Stmt, indent int, output *ast.
 	}
 }
 
-func (e *emitter) emitTryFailure(result string, indent int, output *ast.Type, inRoute bool) {
+func (e *emitter) emitTryFailure(result string, call ast.Expr, indent int, output *ast.Type, inRoute bool) {
 	if e.transaction != "" {
 		e.line(indent, "_ = %s.Rollback()", e.transaction)
 	}
-	if inRoute {
-		e.line(indent, `http.Error(w, fmt.Sprint(*%s.Err), http.StatusInternalServerError)`, result)
+	if inRoute && output != nil {
+		errorName := e.nextTemp()
+		if isRequestParseCall(call.Value) && callErrorType(call).Name == "string" && output.Args[1].Name != "string" {
+			e.line(indent, "%s := %s", errorName, e.enumCases["invalid_request"])
+		} else {
+			e.line(indent, "%s := *%s.Err", errorName, result)
+		}
+		e.line(indent, "return %s{Err: &%s}", goType(*output), errorName)
+	} else if inRoute {
+		status := "http.StatusInternalServerError"
+		if isRequestParseCall(call.Value) {
+			status = "http.StatusBadRequest"
+		}
+		e.line(indent, `http.Error(w, fmt.Sprint(*%s.Err), %s)`, result, status)
 		e.line(indent, "return")
 	} else if output != nil && output.Name == "result" {
 		errorName := e.nextTemp()
@@ -892,10 +935,7 @@ func (e *emitter) emitTryFailure(result string, indent int, output *ast.Type, in
 }
 
 func (e *emitter) emitDatabaseFailure(err string, indent int, output *ast.Type, inRoute bool) {
-	if inRoute {
-		e.line(indent, "http.Error(w, %s.Error(), http.StatusInternalServerError)", err)
-		e.line(indent, "return")
-	} else if output != nil && output.Name == "result" && len(output.Args) == 2 && output.Args[1].Name == "string" {
+	if output != nil && output.Name == "result" && len(output.Args) == 2 && output.Args[1].Name == "string" {
 		messageName := e.nextTemp()
 		e.line(indent, "%s := %s.Error()", messageName, err)
 		e.line(indent, "return %s{Err: &%s}", goType(*output), messageName)
@@ -903,6 +943,9 @@ func (e *emitter) emitDatabaseFailure(err string, indent int, output *ast.Type, 
 		errorName := e.nextTemp()
 		e.line(indent, "%s := %s", errorName, e.enumCases["database_failure"])
 		e.line(indent, "return %s{Err: &%s}", goType(*output), errorName)
+	} else if inRoute {
+		e.line(indent, "http.Error(w, %s.Error(), http.StatusInternalServerError)", err)
+		e.line(indent, "return")
 	} else {
 		e.line(indent, "panic(%s)", err)
 	}
@@ -923,7 +966,10 @@ func (e *emitter) emitResultReturn(expr ast.Expr, output ast.Type, indent int) {
 	e.line(indent, "return %s{Err: &%s}", typeName, tmp)
 }
 
-func (e *emitter) emitRespond(stmt *ast.RespondStmt, indent int) {
+func (e *emitter) emitRespond(stmt *ast.RespondStmt, indent int, output *ast.Type, inRoute bool) {
+	if inRoute && output != nil {
+		e.line(indent, "verbaRouteResponded = true")
+	}
 	switch stmt.Format {
 	case "json":
 		if stmt.Value != nil {
@@ -932,7 +978,7 @@ func (e *emitter) emitRespond(stmt *ast.RespondStmt, indent int) {
 			e.line(indent, "%s, %s := json.Marshal(%s)", dataName, errorName, e.expr(*stmt.Value))
 			e.line(indent, "if %s != nil {", errorName)
 			e.line(indent+1, "http.Error(w, %s.Error(), http.StatusInternalServerError)", errorName)
-			e.line(indent+1, "return")
+			e.emitReturn(indent+1, output, inRoute)
 			e.line(indent, "}")
 			e.line(indent, `w.Header().Set("Content-Type", "application/json; charset=utf-8")`)
 			e.line(indent, "w.WriteHeader(%d)", stmt.Status)
@@ -951,7 +997,56 @@ func (e *emitter) emitRespond(stmt *ast.RespondStmt, indent int) {
 			e.line(indent, "_, _ = io.WriteString(w, %s)", e.expr(*stmt.Value))
 		}
 	}
+	e.emitReturn(indent, output, inRoute)
+}
+
+const httpStatusOK = 200
+
+func (e *emitter) emitReturn(indent int, output *ast.Type, inRoute bool) {
+	if inRoute && output != nil {
+		e.line(indent, "return %s{}", goType(*output))
+		return
+	}
 	e.line(indent, "return")
+}
+
+func (e *emitter) emitRouteError(value string, errorType ast.Type, indent int) {
+	statusName := e.nextTemp()
+	e.line(indent, "%s := http.StatusInternalServerError", statusName)
+	if enum := e.enums[errorType.Name]; enum != nil {
+		e.line(indent, "switch %s {", value)
+		for _, item := range enum.Cases {
+			status := routeErrorStatus(item.Name)
+			if status != "http.StatusInternalServerError" {
+				e.line(indent, "case %s:", e.enumCases[item.Name])
+				e.line(indent+1, "%s = %s", statusName, status)
+			}
+		}
+		e.line(indent, "}")
+	}
+	e.line(indent, "http.Error(w, fmt.Sprint(%s), %s)", value, statusName)
+}
+
+func routeErrorStatus(name string) string {
+	switch name {
+	case "invalid_request", "invalid_email":
+		return "http.StatusBadRequest"
+	case "user_not_found":
+		return "http.StatusNotFound"
+	default:
+		return "http.StatusInternalServerError"
+	}
+}
+
+func isRequestParseCall(name string) bool {
+	return name == "json_decode" || name == "parse_uuid"
+}
+
+func callErrorType(expr ast.Expr) ast.Type {
+	if expr.CallResultType.Name == "result" && len(expr.CallResultType.Args) == 2 {
+		return expr.CallResultType.Args[1]
+	}
+	return ast.Type{}
 }
 
 func (e *emitter) expr(expr ast.Expr) string {

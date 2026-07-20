@@ -45,7 +45,40 @@ begin
 end
 ```
 
-路由是 HTTP 错误边界。`try` 遇到无效 JSON 或 UUID 时会停止当前路由并返回 500；后续里程碑会加入可声明的应用错误到 HTTP 状态映射。
+没有声明输出类型的路由仍是一个简单 HTTP 错误边界。`try` 遇到无效 JSON 或 UUID 时会停止当前路由并返回 400；其他未分类失败返回 500。
+
+## 类型化路由结果
+
+生产服务通常希望应用错误具有稳定状态码。路由可以声明 `result` 输出：
+
+```verba
+enum app_error
+begin
+    case invalid_request
+    case user_not_found
+    case database_failure
+end
+
+route find_user
+method get
+path /users/{id}
+output result uuid app_error
+begin
+    let user_id to be try call parse_uuid id
+    return call ok user_id
+end
+```
+
+`return call ok value` 生成 200 JSON 响应。也可以继续用 `respond json 201 value` 选择明确的成功状态。错误 case 使用固定约定：
+
+| case | HTTP 状态 |
+| --- | --- |
+| `invalid_request`、`invalid_email` | 400 |
+| `user_not_found` | 404 |
+| `database_failure` | 500 |
+| 其他 case | 500 |
+
+`json_decode` 和 `parse_uuid` 原本返回字符串错误。类型化路由只有在错误枚举包含 `invalid_request` 时才允许用 `try` 自动传播它们。SQL 调用采用同样的严格规则：目标枚举必须包含 `database_failure`。遗漏 case 会在编译期报告，而不是运行时猜测。
 
 ## 响应
 

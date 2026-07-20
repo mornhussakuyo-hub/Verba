@@ -164,6 +164,51 @@ end
 	}
 }
 
+func TestEmitTypedRouteResultBoundary(t *testing.T) {
+	source := []byte(`module example
+enum app_error
+begin
+    case invalid_request
+    case invalid_email
+    case user_not_found
+    case database_failure
+end
+route find_user
+method get
+path /users/{id}
+output result uuid app_error
+begin
+    let user_id to be try call parse_uuid id
+    return call ok user_id
+end
+`)
+	file, parseDiagnostics := verbaParser.Parse("route_result.vrb", source)
+	if len(parseDiagnostics) != 0 {
+		t.Fatalf("parse diagnostics: %#v", parseDiagnostics)
+	}
+	if diagnostics := check.Files([]*ast.File{file}); len(diagnostics) != 0 {
+		t.Fatalf("check diagnostics: %#v", diagnostics)
+	}
+	generated, diagnostics := Files([]*ast.File{file})
+	if len(diagnostics) != 0 {
+		t.Fatalf("emit diagnostics: %#v", diagnostics)
+	}
+	text := string(generated)
+	for _, expected := range []string{
+		"verbaRouteResult := func() Result[string, AppError]",
+		"AppErrorInvalidRequest",
+		"case AppErrorInvalidEmail:",
+		"case AppErrorUserNotFound:",
+		"http.StatusBadRequest",
+		"http.StatusNotFound",
+		"json.Marshal(verbaRouteResult.Value)",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("generated source does not contain %q:\n%s", expected, text)
+		}
+	}
+}
+
 func TestMinimalProgramOmitsUnusedRuntime(t *testing.T) {
 	source := []byte(`module minimal
 route health

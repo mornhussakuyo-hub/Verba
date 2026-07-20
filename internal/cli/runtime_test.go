@@ -29,6 +29,12 @@ record decimal_request
 begin
     field amount decimal
 end
+enum app_error
+begin
+    case invalid_request
+    case user_not_found
+    case database_failure
+end
 function exact_total
 output decimal
 begin
@@ -87,6 +93,36 @@ begin
     let raw_id to be get payload id
     let parsed_id to be try call parse_uuid raw_id
     respond json 200 parsed_id
+end
+route typed_success
+method get
+path /typed-success
+output result string app_error
+begin
+    let value to be text ready
+    return call ok value
+end
+route typed_parse
+method get
+path /typed-parse/{id}
+output result uuid app_error
+begin
+    let parsed_id to be try call parse_uuid id
+    return call ok parsed_id
+end
+route typed_missing
+method get
+path /typed-missing
+output result string app_error
+begin
+    return call error user_not_found
+end
+route typed_database_failure
+method get
+path /typed-database-failure
+output result string app_error
+begin
+    return call error database_failure
 end
 `)
 	if err := os.WriteFile(sourcePath, source, 0o644); err != nil {
@@ -200,9 +236,15 @@ end
 	}
 	_, _ = io.Copy(io.Discard, invalidResponse.Body)
 	_ = invalidResponse.Body.Close()
-	if invalidResponse.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("invalid JSON returned status %d, want 500", invalidResponse.StatusCode)
+	if invalidResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid JSON returned status %d, want 400", invalidResponse.StatusCode)
 	}
+
+	assertHTTPResponse(t, client, http.MethodGet, baseURL+"/typed-success", "", http.StatusOK, `"ready"`)
+	assertHTTPResponse(t, client, http.MethodGet, baseURL+"/typed-parse/550e8400-e29b-41d4-a716-446655440000", "", http.StatusOK, `"550e8400-e29b-41d4-a716-446655440000"`)
+	assertHTTPResponse(t, client, http.MethodGet, baseURL+"/typed-parse/not-a-uuid", "", http.StatusBadRequest, "invalid_request")
+	assertHTTPResponse(t, client, http.MethodGet, baseURL+"/typed-missing", "", http.StatusNotFound, "user_not_found")
+	assertHTTPResponse(t, client, http.MethodGet, baseURL+"/typed-database-failure", "", http.StatusInternalServerError, "database_failure")
 	stopServer()
 }
 
@@ -277,4 +319,24 @@ func waitForHTTP(t *testing.T, client *http.Client, url string, serverOutput *by
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("generated server did not become ready:\n%s", serverOutput.String())
+}
+
+func assertHTTPResponse(t *testing.T, client *http.Client, method, url, body string, status int, expectedBody string) {
+	t.Helper()
+	request, err := http.NewRequest(method, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseBody, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != status || strings.TrimSpace(string(responseBody)) != expectedBody {
+		t.Fatalf("unexpected response for %s: status=%d body=%q", url, response.StatusCode, responseBody)
+	}
 }

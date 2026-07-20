@@ -1,0 +1,104 @@
+module user_service
+
+use http
+use json
+use sql postgres
+use uuid
+use time
+
+record create_user_request
+begin
+    field name string
+    field email string
+end
+
+record user
+begin
+    field id uuid
+    field name string
+    field email string
+    field created_at time
+end
+
+enum app_error
+begin
+    case invalid_request
+    case invalid_email
+    case user_not_found
+    case database_failure
+end
+
+embed regex email_pattern until end_email_pattern
+^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$
+end_email_pattern
+
+embed sql insert_user until end_insert_user
+INSERT INTO users (id, name, email)
+VALUES (:id, :name, :email)
+RETURNING id, name, email, created_at;
+end_insert_user
+
+embed sql find_user until end_find_user
+SELECT id, name, email, created_at
+FROM users
+WHERE id = :id;
+end_find_user
+
+function create_user
+input payload create_user_request
+output result user app_error
+begin
+    let name to be get payload name
+    let email to be get payload email
+    let email_valid to be call regex_match email_pattern email
+    let email_invalid to be call not email_valid
+
+    if email_invalid
+    begin
+        return call error invalid_email
+    end
+
+    let user_id to be call new_uuid
+
+    let row to be try call sql_one insert_user
+    begin
+        with id user_id
+        with name name
+        with email email
+    end
+
+    return call ok row
+end
+
+route create_user_route
+method post
+path /users
+output result user app_error
+begin
+    let payload to be try call json_decode create_user_request request_body
+    let created to be try call create_user payload
+    respond json 201 created
+end
+
+route get_user_route
+method get
+path /users/{id}
+output result user app_error
+begin
+    let user_id to be try call parse_uuid id
+
+    let found to be try call sql_optional find_user
+    begin
+        with id user_id
+    end
+
+    let missing to be call is_none found
+
+    if missing
+    begin
+        return call error user_not_found
+    end
+
+    let user_value to be call unwrap found
+    respond json 200 user_value
+end

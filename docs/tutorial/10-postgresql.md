@@ -129,4 +129,6 @@ curl.exe -X POST http://127.0.0.1:8080/accounts -H "Content-Type: application/js
 curl.exe http://127.0.0.1:8080/accounts/550e8400-e29b-41d4-a716-446655440000
 ```
 
-至此，你已经走完 Verba 当前工具链的完整纵向路径：源码和语法岛经过静态检查，生成可构建的 Go 服务，并在运行时保持 HTTP、JSON、精确数值与 PostgreSQL 的类型边界。
+至此，你已经走完 Verba 当前工具链的数据库纵向路径：源码和语法岛经过静态检查，生成可构建的 Go 服务，并在运行时保持 HTTP、JSON、精确数值与 PostgreSQL 的类型边界。
+
+下一章：[完整用户服务](11-user-service.md)。

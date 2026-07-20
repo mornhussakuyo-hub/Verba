@@ -14,6 +14,7 @@
 8. [项目清单](08-project-manifest.md)：项目身份、构建目标、数据库和依赖元数据。
 9. [数值类型与精确小数](09-numeric-types.md)：整数范围、上下文常量、浮点数和 decimal。
 10. [PostgreSQL](10-postgresql.md)：schema 快照、类型化查询、结果行和事务。
+11. [完整用户服务](11-user-service.md)：组合 HTTP、JSON、UUID、正则、PostgreSQL 与类型化路由错误。
 
 ## 约定
 

@@ -382,6 +382,70 @@ end
 	}
 }
 
+func TestTypedRouteMapsDeclaredApplicationErrors(t *testing.T) {
+	source := []byte(`module example
+enum app_error
+begin
+    case invalid_request
+    case user_not_found
+    case database_failure
+end
+route find_user
+method get
+path /users/{id}
+output result uuid app_error
+begin
+    let user_id to be try call parse_uuid id
+    return call ok user_id
+end
+route missing_user
+method get
+path /missing
+output result string app_error
+begin
+    return call error user_not_found
+end
+`)
+	if diagnostics := checkSource(t, source); len(diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", diagnostics)
+	}
+}
+
+func TestTypedRouteRequiresMappableRequestError(t *testing.T) {
+	source := []byte(`module example
+enum app_error
+begin
+    case user_not_found
+end
+route find_user
+method get
+path /users/{id}
+output result uuid app_error
+begin
+    let user_id to be try call parse_uuid id
+    return call ok user_id
+end
+`)
+	if diagnostics := checkSource(t, source); !hasCode(diagnostics, "VRB1437") {
+		t.Fatalf("expected VRB1437, got %#v", diagnostics)
+	}
+}
+
+func TestRouteOutputMustBeResult(t *testing.T) {
+	source := []byte(`module example
+route invalid
+method get
+path /invalid
+output string
+begin
+    return text invalid
+end
+`)
+	if diagnostics := checkSource(t, source); !hasCode(diagnostics, "VRB1134") {
+		t.Fatalf("expected VRB1134, got %#v", diagnostics)
+	}
+}
+
 func TestNumericLiteralsUseContextualWidths(t *testing.T) {
 	source := []byte(`module example
 function small_add

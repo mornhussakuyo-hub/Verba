@@ -504,6 +504,8 @@ respond empty 204
 
 respond 是终止语句。响应格式、状态码和主体类型在编译期检查。框架可以为 record 自动生成 JSON 编码器；字符串不会被误当作 JSON。
 
+带有 `output result T E` 的路由同时也是类型化 HTTP 错误边界。`return call ok value` 默认生成 `200` JSON 响应，显式 `respond` 可以选择其他成功状态；`return call error value` 和 `try` 传播的错误由编译器统一映射。MVP 采用按错误 case 名称确定的稳定约定：`invalid_request` 与 `invalid_email` 映射为 `400`，`user_not_found` 映射为 `404`，`database_failure` 以及未列出的 case 映射为 `500`。`json_decode` 与 `parse_uuid` 的字符串错误只有在目标错误枚举声明 `invalid_request` 时才能自动转换，否则类型检查失败。后续版本可以增加显式状态元数据，但不得改变这套 MVP 默认值。
+
 ## 8.4 JSON 的日常使用不需要原始岛
 
 JSON 岛适合常量、示例、schema 或外部配置。普通请求体应直接解码为静态 record，普通响应应直接编码 record。

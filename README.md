@@ -69,6 +69,7 @@ verba help
 - `decimal` 使用任意精度精确运算和无损 JSON number 编解码，不会降为 `float64`。
 - JSON 解码与 UUID 解析使用真实 `result` 错误路径；HTML 模板默认转义，正则资源预编译。
 - JSON、文本和空 HTTP 响应，以及 `sql_exec`、`sql_one`、`sql_optional`、`sql_many` 和显式事务的 Go 代码生成。
+- `output result T E` 路由会把成功返回值编码为 200 JSON，并将请求错误、未找到和数据库错误稳定映射为 400、404 和 500。
 - SQL 构建使用固定版本 `pgx/v5.7.6`；精确 decimal 支持数据库扫描和参数绑定，事务在 `try` 失败时回滚、正常退出时提交。
 - `use` 能力与 `verba.toml` 依赖解析、缺失能力检查和确定性 capability 审计。
 
@@ -93,7 +94,7 @@ end
 
 ## 入门教程
 
-从 [Verba 入门教程](docs/tutorial/README.md) 开始，通过十个章节学习安装、基础语法、函数与类型、HTTP、语法岛、工具链、项目清单、精确数值和 PostgreSQL。七个可执行项目位于 `learn/`。
+从 [Verba 入门教程](docs/tutorial/README.md) 开始，通过十一个章节学习安装、基础语法、函数与类型、HTTP、语法岛、工具链、项目清单、精确数值、PostgreSQL 和完整用户服务。八个可执行项目位于 `learn/`。
 
 ## 开发
 
