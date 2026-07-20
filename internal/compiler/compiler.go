@@ -14,6 +14,7 @@ import (
 	"github.com/verba-lang/verba/internal/emitgo"
 	"github.com/verba-lang/verba/internal/manifest"
 	"github.com/verba-lang/verba/internal/parser"
+	"github.com/verba-lang/verba/internal/resolve"
 	"github.com/verba-lang/verba/internal/source"
 )
 
@@ -21,6 +22,7 @@ type Program struct {
 	Paths    []string
 	Root     string
 	Manifest *manifest.Manifest
+	Resolved resolve.Result
 	Sources  []*source.File
 	Files    []*ast.File
 }
@@ -93,6 +95,7 @@ func Load(inputs []string) (*Program, []diagnostic.Diagnostic, error) {
 	program := &Program{Paths: paths, Root: commonDirectory(paths)}
 	manager := source.NewManager()
 	var diagnostics []diagnostic.Diagnostic
+	parseFailed := false
 	manifestPath, err := manifest.Find(program.Root)
 	if err != nil {
 		return nil, nil, err
@@ -111,11 +114,15 @@ func Load(inputs []string) (*Program, []diagnostic.Diagnostic, error) {
 		}
 		diagnostics = append(diagnostics, sourceDiagnostics...)
 		if diagnostic.HasErrors(sourceDiagnostics) {
+			parseFailed = true
 			continue
 		}
 		file, items := parser.ParseFile(fileSource)
 		program.Files = append(program.Files, file)
 		diagnostics = append(diagnostics, items...)
+		if diagnostic.HasErrors(items) {
+			parseFailed = true
+		}
 	}
 	program.Sources = manager.Files()
 	if program.Manifest != nil && program.Manifest.Name != "" {
@@ -133,7 +140,18 @@ func Load(inputs []string) (*Program, []diagnostic.Diagnostic, error) {
 			}
 		}
 	}
-	if !diagnostic.HasErrors(diagnostics) {
+	if !parseFailed {
+		options := resolve.Options{}
+		if program.Manifest != nil {
+			options.Dependencies = program.Manifest.Dependencies
+			options.ManifestPath = program.Manifest.Path
+			if program.Manifest.Database != nil {
+				options.DatabaseDialect = program.Manifest.Database.Dialect
+			}
+		}
+		var resolveDiagnostics []diagnostic.Diagnostic
+		program.Resolved, resolveDiagnostics = resolve.Files(program.Files, options)
+		diagnostics = append(diagnostics, resolveDiagnostics...)
 		diagnostics = append(diagnostics, check.Files(program.Files)...)
 	}
 	diagnostic.Sort(diagnostics)

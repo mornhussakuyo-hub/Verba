@@ -1,6 +1,7 @@
 module hello
 
 use http
+use json
 
 function normalize_name
 input value string

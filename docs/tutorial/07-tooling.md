@@ -52,6 +52,17 @@ verba run path/to/project -- argument1 argument2
 
 `run` 在临时目录构建程序，前台运行，并把 `--` 后的值传给生成程序。
 
+## Audit
+
+```powershell
+verba audit learn/04_http
+verba audit --json learn/04_http
+```
+
+`audit` 列出项目声明且实际解析成功的 HTTP、JSON、UUID、time、SQL 和高风险显式能力，以及清单依赖是否被 `use`。普通输出适合人工审查，JSON 输出适合 CI、容器权限生成和安全策略工具。
+
+路由会要求 `use http`，JSON 编解码或响应会要求 `use json`，UUID API/类型会要求 `use uuid`，SQL 资源与事务会要求 `use sql postgres`。这使权限声明不是装饰性注释，而是编译条件。
+
 ## 常见问题
 
 ### Duplicate declaration

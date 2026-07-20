@@ -16,7 +16,7 @@ The current work focuses on a typed semantic pipeline before expanding the runti
 | Region scanner | Implemented | Core spans, exact island terminators, byte-preserved raw content, and missing-terminator diagnostics are active in parsing and formatting |
 | Core lexer | Partial | Keywords, identifiers, numeric syntax, newlines, controlled literals, and island exclusion work; parser token consumption and broader recovery remain |
 | Parser | Partial | Uses scanned island regions and lexer diagnostics; typed route inputs, richer literals, token-driven parsing, and broader recovery remain |
-| Name resolver | Partial | Typed local scopes exist; modules, imports, case ambiguity, references remain |
+| Name resolver | Partial | Module identity, manifest dependencies, `use` capabilities, typed local scopes, and forward declarations work; imported symbols, case ambiguity, and references remain |
 | Type checker | In progress | Numeric constants, complete builtin signatures, control-flow joins, SQL result types |
 | Island registry | Partial | JSON and SQL binding checks, compiled regexes, and checked HTML/text slots exist; SQL schema metadata and richer island parsers remain |
 | Typed IR | Missing | Stable lowered representation between checking and emission |
@@ -37,7 +37,7 @@ The current work focuses on a typed semantic pipeline before expanding the runti
 | SQL | named parameter extraction and exact binding checks | dialect parser, schema snapshot, drivers, rows, transactions |
 | HTML | exact template slot checking, generated renderer, escaped dynamic values | structural parser and explicit trusted HTML model |
 | Regex | compile-time validation, precompiled resources, runtime matching helper | richer regex diagnostics and editor integration |
-| Capabilities | `use` is parsed | capability validation, audit output, runtime enforcement |
+| Capabilities | built-in and explicit capability validation, inferred requirements, dependency usage, text/JSON audit output | runtime enforcement and deployment policy generation |
 
 ## Documentation
 

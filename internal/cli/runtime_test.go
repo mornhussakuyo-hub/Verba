@@ -19,6 +19,8 @@ func TestBuildAndRunHTTPService(t *testing.T) {
 	sourcePath := filepath.Join(directory, "main.vrb")
 	source := []byte(`module runtime_test
 use http
+use json
+use uuid
 record uuid_request
 begin
     field id string

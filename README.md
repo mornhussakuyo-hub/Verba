@@ -38,6 +38,7 @@ verba check [paths...]
 verba fmt [--check] [--stdout] [paths...]
 verba build [-o output] [--emit-go path] [paths...]
 verba run [paths...] [-- program-arguments...]
+verba audit [--json] [paths...]
 verba version
 verba help
 ```
@@ -46,6 +47,7 @@ verba help
 - `fmt` 就地应用唯一格式；`--check` 只检查，适合 CI；`--stdout` 输出单个文件的格式化结果。
 - `build` 生成 Go 主程序并调用 `go build`。默认输出到 `build/<module>`。
 - `run` 在临时目录构建，然后以前台进程运行。
+- `audit` 输出模块实际声明的能力和清单依赖；`--json` 适合 CI、容器策略和安全审查工具。
 
 目录输入会递归查找 `.vrb` 文件，并跳过隐藏目录、`build`、`dist` 和 `vendor`。
 
@@ -63,6 +65,7 @@ verba help
 - 类型化作用域、函数参数、字段路径、条件、返回路径、optional 和 result / try 检查。
 - JSON 解码与 UUID 解析使用真实 `result` 错误路径；HTML 模板默认转义，正则资源预编译。
 - JSON、文本和空 HTTP 响应的 Go 代码生成。
+- `use` 能力与 `verba.toml` 依赖解析、缺失能力检查和确定性 capability 审计。
 
 0.1.0 的 Go 后端暂不生成数据库执行代码。SQL 岛及绑定可以通过 `verba check` 验证；包含 `sql_exec`、`sql_one`、`sql_optional`、`sql_many` 或 `transaction` 的程序在 `build` 阶段会收到明确诊断。这样不会在未选择数据库驱动和连接模型时生成行为不可靠的程序。
 
@@ -106,6 +109,7 @@ internal/manifest      TOML 项目清单发现与验证
 internal/region        核心区与原始语法岛的字节边界扫描
 internal/lexer         核心 token、数值和受控字面量词法检查
 internal/parser        行导向语法与 AST 构建
+internal/resolve       use、依赖、能力需求与审计解析
 internal/check         名称、类型、作用域和适配器检查
 internal/format        幂等格式化器
 internal/emitgo        Go 后端

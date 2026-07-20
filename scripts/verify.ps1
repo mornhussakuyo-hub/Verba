@@ -29,6 +29,8 @@ foreach ($project in $projects) {
     Write-Host "Verifying $project"
     go run ./cmd/verba check $project
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    go run ./cmd/verba audit --json $project | Out-Null
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     go run ./cmd/verba build -o (Join-Path $BuildDirectory ($name + $extension)) $project
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }

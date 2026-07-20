@@ -1,6 +1,8 @@
 module web_service
 
 use http
+use json
+use uuid
 
 record uuid_request
 begin

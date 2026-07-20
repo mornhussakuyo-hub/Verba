@@ -15,6 +15,7 @@
 - 新增严格的 `verba.toml` 项目清单、模块名一致性、数据库 schema 路径和依赖元数据验证。
 - 新增独立 region scanner 和 core lexer，以字节 span 隔离语法岛并检查核心 token 与数值语法。
 - 格式化器按 region 工作，逐字节保留岛内容和受控 `text` / `url` / `path` 字面量正文。
+- 新增 `use` 能力/清单依赖解析、能力使用推导、缺失与重复声明诊断，以及文本/JSON `verba audit`。
 
 ## 0.1.0 - 2026-07-14
 

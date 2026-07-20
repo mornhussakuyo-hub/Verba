@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"github.com/verba-lang/verba/internal/compiler"
 	"github.com/verba-lang/verba/internal/diagnostic"
 	verbaformat "github.com/verba-lang/verba/internal/format"
+	"github.com/verba-lang/verba/internal/resolve"
 	"github.com/verba-lang/verba/internal/source"
 )
 
@@ -50,6 +52,8 @@ func (c *CLI) Run(args []string) int {
 		return c.build(args[1:])
 	case "run":
 		return c.run(args[1:])
+	case "audit":
+		return c.audit(args[1:])
 	default:
 		fmt.Fprintf(c.Stderr, "verba: unknown command %q\n\n", args[0])
 		c.help()
@@ -68,6 +72,7 @@ Commands:
   fmt       Format Verba source files in place
   build     Generate Go and build an executable
   run       Build and run a Verba program
+  audit     Report declared capabilities and dependencies
   version   Print the installed version
   help      Show this help
 
@@ -76,6 +81,7 @@ Examples:
   verba fmt --check .
   verba build -o build/server.exe examples/hello
   verba run examples/hello
+  verba audit --json examples/hello
 
 Environment:
   VERBA_ADDRESS   Address used by generated HTTP servers (default :8080)`)
@@ -239,6 +245,68 @@ func (c *CLI) run(args []string) int {
 			return exitError.ExitCode()
 		}
 		return c.failure(err)
+	}
+	return 0
+}
+
+func (c *CLI) audit(args []string) int {
+	fs := flag.NewFlagSet("audit", flag.ContinueOnError)
+	fs.SetOutput(c.Stderr)
+	jsonOutput := fs.Bool("json", false, "write machine-readable JSON")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	program, diagnostics, err := compiler.Load(fs.Args())
+	if err != nil {
+		return c.failure(err)
+	}
+	if c.printDiagnostics(diagnostics) {
+		return 1
+	}
+	version, target := "", "go"
+	if program.Manifest != nil {
+		version = program.Manifest.Version
+		target = program.Manifest.Target
+	}
+	if *jsonOutput {
+		output := struct {
+			Module       string               `json:"module"`
+			Version      string               `json:"version,omitempty"`
+			Target       string               `json:"target"`
+			Capabilities []resolve.Capability `json:"capabilities"`
+			Dependencies []resolve.Dependency `json:"dependencies"`
+		}{
+			Module: program.Name(), Version: version, Target: target,
+			Capabilities: program.Resolved.Capabilities, Dependencies: program.Resolved.Dependencies,
+		}
+		encoder := json.NewEncoder(c.Stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(output); err != nil {
+			return c.failure(err)
+		}
+		return 0
+	}
+	fmt.Fprintf(c.Stdout, "module %s\n", program.Name())
+	if version != "" {
+		fmt.Fprintf(c.Stdout, "version %s\n", version)
+	}
+	fmt.Fprintf(c.Stdout, "target %s\n", target)
+	for _, capability := range program.Resolved.Capabilities {
+		fmt.Fprintf(c.Stdout, "capability %s", capability.Name)
+		if capability.Argument != "" {
+			fmt.Fprintf(c.Stdout, " %s", capability.Argument)
+		}
+		if capability.Explicit {
+			fmt.Fprint(c.Stdout, " explicit")
+		}
+		fmt.Fprintln(c.Stdout)
+	}
+	for _, dependency := range program.Resolved.Dependencies {
+		state := "unused"
+		if dependency.Used {
+			state = "used"
+		}
+		fmt.Fprintf(c.Stdout, "dependency %s %s %s\n", dependency.Name, dependency.Constraint, state)
 	}
 	return 0
 }
