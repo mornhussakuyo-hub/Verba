@@ -5,11 +5,7 @@
 提交修改前请运行：
 
 ```powershell
-go test ./...
-go vet ./...
-go run ./cmd/verba fmt --check examples
-go run ./cmd/verba check examples
-go run ./cmd/verba build -o build/hello.exe examples/hello
+./scripts/verify.ps1
 ```
 
 实现新语法时，请同时更新：

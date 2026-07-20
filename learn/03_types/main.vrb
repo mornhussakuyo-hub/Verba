@@ -1,0 +1,35 @@
+module types
+
+record profile
+begin
+    field display_name string
+end
+
+record user
+begin
+    field profile profile
+    field nickname optional string
+end
+
+enum role
+begin
+    case admin
+    case member
+end
+
+function visible_name
+input value user
+output string
+begin
+    let nickname to be get value nickname
+    let present to be call is_some nickname
+
+    if present
+    begin
+        return call unwrap nickname
+    end
+    else
+    begin
+        return get value profile display_name
+    end
+end

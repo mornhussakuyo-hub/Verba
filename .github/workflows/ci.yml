@@ -19,15 +19,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Test
-        run: go test ./...
-      - name: Vet
-        run: go vet ./...
-      - name: Build CLI
-        run: go build -trimpath -o build/verba${{ runner.os == 'Windows' && '.exe' || '' }} ./cmd/verba
-      - name: Check example
-        run: go run ./cmd/verba check examples/hello
-      - name: Check formatting
-        run: go run ./cmd/verba fmt --check examples/hello
-      - name: Build example
-        run: go run ./cmd/verba build -o build/hello${{ runner.os == 'Windows' && '.exe' || '' }} examples/hello
+      - name: Verify toolchain, examples, and tutorials
+        shell: pwsh
+        run: ./scripts/verify.ps1

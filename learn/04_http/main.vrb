@@ -1,0 +1,18 @@
+module web_service
+
+use http
+
+route health
+method get
+path /health
+begin
+    respond text 200 service ready
+end
+
+route greet
+method get
+path /hello/{name}
+begin
+    let normalized to be call lowercase name
+    respond json 200 normalized
+end

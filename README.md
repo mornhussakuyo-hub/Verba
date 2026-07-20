@@ -79,6 +79,10 @@ begin
 end
 ```
 
+## 入门教程
+
+从 [Verba 入门教程](docs/tutorial/README.md) 开始，按章节学习安装、基础语法、函数与类型、HTTP、语法岛和工具链。每个核心章节都在 `learn/` 下提供对应项目。
+
 ## 开发
 
 ```powershell
