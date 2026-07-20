@@ -1,10 +1,9 @@
 package lexer
 
 import (
-	"regexp"
-
 	"github.com/verba-lang/verba/internal/ast"
 	"github.com/verba-lang/verba/internal/diagnostic"
+	"github.com/verba-lang/verba/internal/numeric"
 	"github.com/verba-lang/verba/internal/region"
 	"github.com/verba-lang/verba/internal/source"
 )
@@ -40,9 +39,6 @@ type word struct {
 	text       string
 	start, end int
 }
-
-var integerPattern = regexp.MustCompile(`^[+-]?[0-9]+$`)
-var floatPattern = regexp.MustCompile(`^[+-]?(?:[0-9]+\.[0-9]+|[0-9]+(?:\.[0-9]+)?[eE][+-]?[0-9]+)$`)
 
 var keywords = map[string]bool{
 	"module": true, "use": true, "begin": true, "end": true,
@@ -201,10 +197,10 @@ func classify(value string) Kind {
 	if identifier(value) {
 		return Identifier
 	}
-	if integerPattern.MatchString(value) {
+	if numeric.Classify(value) == numeric.Integer {
 		return Integer
 	}
-	if floatPattern.MatchString(value) {
+	if numeric.Classify(value) == numeric.Real {
 		return Float
 	}
 	return Invalid

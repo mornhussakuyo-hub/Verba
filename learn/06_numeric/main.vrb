@@ -1,0 +1,31 @@
+module numeric_types
+
+use http
+use json
+
+function add_tax
+input subtotal decimal
+input tax decimal
+output decimal
+begin
+    return call add subtotal tax
+end
+
+function next_code
+input current uint8
+output uint8
+begin
+    return call add current 1
+end
+
+route total
+method get
+path /total
+begin
+    let amount to be call add_tax
+    begin
+        with subtotal 19.90
+        with tax 0.10
+    end
+    respond json 200 amount
+end

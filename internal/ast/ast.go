@@ -109,14 +109,15 @@ const (
 )
 
 type Expr struct {
-	Kind        ExprKind
-	Value       string
-	LiteralType string
-	Args        []Expr
-	NamedArgs   []NamedArg
-	Try         bool
-	Not         bool
-	Pos         Position
+	Kind         ExprKind
+	Value        string
+	LiteralType  string
+	ResolvedType Type
+	Args         []Expr
+	NamedArgs    []NamedArg
+	Try          bool
+	Not          bool
+	Pos          Position
 }
 
 type NamedArg struct {

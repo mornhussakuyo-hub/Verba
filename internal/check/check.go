@@ -9,6 +9,7 @@ import (
 
 	"github.com/verba-lang/verba/internal/ast"
 	"github.com/verba-lang/verba/internal/diagnostic"
+	"github.com/verba-lang/verba/internal/numeric"
 )
 
 var sqlParameter = regexp.MustCompile(`:[A-Za-z_][A-Za-z0-9_]*`)
@@ -254,21 +255,29 @@ func (c *Checker) validateStatements(statements []ast.Stmt, local scope, inRoute
 	for _, statement := range statements {
 		switch value := statement.(type) {
 		case *ast.LetStmt:
-			inferred := c.validateExpr(value.Value, local, expectedReturn)
+			var expected *ast.Type
+			if value.Value.Try {
+				expected = expectedReturn
+			}
+			inferred := c.validateExpr(&value.Value, local, expected)
 			if _, exists := local[value.Name]; exists {
 				c.error(value.Pos, "VRB1301", fmt.Sprintf("name %s is already bound in this scope", value.Name), "choose a new local name")
 			}
 			local[value.Name] = binding{typeValue: inferred, mutable: value.Mutable}
 		case *ast.SetStmt:
 			target := c.validateSetTarget(value, local)
-			actual := c.validateExpr(value.Value, local, expectedReturn)
+			actual := c.validateExpr(&value.Value, local, &target)
 			c.requireAssignable(value.Pos, target, actual, "assigned value")
 		case *ast.ExprStmt:
-			c.validateExpr(value.Value, local, expectedReturn)
+			var expected *ast.Type
+			if value.Value.Try {
+				expected = expectedReturn
+			}
+			c.validateExpr(&value.Value, local, expected)
 		case *ast.ReturnStmt:
 			if expectedReturn == nil {
 				if value.Value != nil {
-					c.validateExpr(*value.Value, local, nil)
+					c.validateExpr(value.Value, local, nil)
 					c.error(value.Pos, "VRB1502", "return provides a value in a function without output", "remove the value or declare an output type")
 				}
 				continue
@@ -277,7 +286,7 @@ func (c *Checker) validateStatements(statements []ast.Stmt, local scope, inRoute
 				c.error(value.Pos, "VRB1503", fmt.Sprintf("return requires a value of type %s", expectedReturn.String()), "return a value matching the function output type")
 				continue
 			}
-			actual := c.validateExpr(*value.Value, local, expectedReturn)
+			actual := c.validateExpr(value.Value, local, expectedReturn)
 			c.requireAssignable(value.Pos, *expectedReturn, actual, "returned value")
 		case *ast.RespondStmt:
 			if !inRoute {
@@ -293,18 +302,22 @@ func (c *Checker) validateStatements(statements []ast.Stmt, local scope, inRoute
 				c.error(value.Pos, "VRB1307", "empty response cannot include a body", "remove the response value")
 			}
 			if value.Value != nil {
-				actual := c.validateExpr(*value.Value, local, expectedReturn)
+				var expected *ast.Type
+				if value.Format == "text" {
+					expected = &stringType
+				}
+				actual := c.validateExpr(value.Value, local, expected)
 				if value.Format == "text" {
 					c.requireAssignable(value.Pos, stringType, actual, "text response")
 				}
 			}
 		case *ast.IfStmt:
-			condition := c.validateExpr(value.Condition, local, expectedReturn)
+			condition := c.validateExpr(&value.Condition, local, &boolType)
 			c.requireAssignable(value.Pos, boolType, condition, "if condition")
 			c.validateStatements(value.Then, cloneScope(local), inRoute, expectedReturn)
 			c.validateStatements(value.Else, cloneScope(local), inRoute, expectedReturn)
 		case *ast.ForStmt:
-			iterable := c.validateExpr(value.Iterable, local, expectedReturn)
+			iterable := c.validateExpr(&value.Iterable, local, nil)
 			child := cloneScope(local)
 			if iterable.Name == "list" && len(iterable.Args) == 1 {
 				child[value.Name] = binding{typeValue: iterable.Args[0]}
@@ -314,17 +327,18 @@ func (c *Checker) validateStatements(statements []ast.Stmt, local scope, inRoute
 			}
 			c.validateStatements(value.Body, child, inRoute, expectedReturn)
 		case *ast.WhileStmt:
-			condition := c.validateExpr(value.Condition, local, expectedReturn)
+			condition := c.validateExpr(&value.Condition, local, &boolType)
 			c.requireAssignable(value.Pos, boolType, condition, "while condition")
 			c.validateStatements(value.Body, cloneScope(local), inRoute, expectedReturn)
 		case *ast.MatchStmt:
-			matchedType := c.validateExpr(value.Value, local, nil)
+			matchedType := c.validateExpr(&value.Value, local, nil)
 			if !c.isMatchable(matchedType) {
 				c.error(value.Pos, "VRB1450", fmt.Sprintf("match value type %s is not comparable", matchedType.String()), "match a scalar or enum value")
 			}
 			seen := map[string]bool{}
-			for _, matchCase := range value.Cases {
-				patternType := c.validateExpr(matchCase.Pattern, local, &matchedType)
+			for index := range value.Cases {
+				matchCase := &value.Cases[index]
+				patternType := c.validateExpr(&matchCase.Pattern, local, &matchedType)
 				c.requireAssignable(matchCase.Pos, matchedType, patternType, "match case")
 				if matchCase.Pattern.Kind != ast.ExprAtom {
 					c.error(matchCase.Pos, "VRB1451", "match case must be a literal or enum case", "bind computed values before match and use constant case patterns")
@@ -359,13 +373,26 @@ func (c *Checker) validateSetTarget(statement *ast.SetStmt, local scope) ast.Typ
 	return c.resolveFieldPath(statement.Pos, root.typeValue, statement.Path[1:])
 }
 
-func (c *Checker) validateExpr(expr ast.Expr, local scope, expected *ast.Type) ast.Type {
+func (c *Checker) validateExpr(expr *ast.Expr, local scope, expected *ast.Type) (result ast.Type) {
+	defer func() {
+		expr.ResolvedType = result
+	}()
 	switch expr.Kind {
 	case ast.ExprInvalid:
 		return unknownType
 	case ast.ExprAtom:
-		if literal, ok := literalType(expr.Value); ok {
-			return literal
+		if expr.Value == "true" || expr.Value == "false" {
+			return boolType
+		}
+		if kind := numeric.Classify(expr.Value); kind != numeric.Invalid {
+			target := ast.Type{Name: numeric.DefaultType(kind)}
+			if expected != nil && isNumeric(*expected) {
+				target = *expected
+			}
+			if err := numeric.CheckLiteral(expr.Value, target.Name); err != nil {
+				c.error(expr.Pos, "VRB1460", err.Error(), "choose a literal representable by the contextual numeric type; Verba does not narrow or round constants")
+			}
+			return target
 		}
 		if value, exists := local[expr.Value]; exists {
 			return value.typeValue
@@ -387,7 +414,7 @@ func (c *Checker) validateExpr(expr ast.Expr, local scope, expected *ast.Type) a
 		if len(expr.Args) < 2 {
 			return unknownType
 		}
-		root := c.validateExpr(expr.Args[0], local, nil)
+		root := c.validateExpr(&expr.Args[0], local, nil)
 		path := make([]string, 0, len(expr.Args)-1)
 		for _, part := range expr.Args[1:] {
 			path = append(path, part.Value)
@@ -397,8 +424,14 @@ func (c *Checker) validateExpr(expr ast.Expr, local scope, expected *ast.Type) a
 		if len(expr.Args) != 2 {
 			return unknownType
 		}
-		left := c.validateExpr(expr.Args[0], local, nil)
-		right := c.validateExpr(expr.Args[1], local, &left)
+		var left, right ast.Type
+		if target, ok := c.inferNumericContext(expr.Args, local, nil); ok {
+			left = c.validateExpr(&expr.Args[0], local, &target)
+			right = c.validateExpr(&expr.Args[1], local, &target)
+		} else {
+			left = c.validateExpr(&expr.Args[0], local, nil)
+			right = c.validateExpr(&expr.Args[1], local, &left)
+		}
 		if !sameType(left, right) && !isUnknown(left) && !isUnknown(right) {
 			c.error(expr.Pos, "VRB1423", fmt.Sprintf("cannot compare %s with %s", left.String(), right.String()), "compare values with the same type")
 		}
@@ -413,7 +446,7 @@ func (c *Checker) validateExpr(expr ast.Expr, local scope, expected *ast.Type) a
 	}
 }
 
-func (c *Checker) validateCall(expr ast.Expr, local scope, expected *ast.Type) ast.Type {
+func (c *Checker) validateCall(expr *ast.Expr, local scope, expected *ast.Type) ast.Type {
 	if fn := c.functions[expr.Value]; fn != nil {
 		result := unitType
 		if fn.Output != nil {
@@ -428,14 +461,15 @@ func (c *Checker) validateCall(expr ast.Expr, local scope, expected *ast.Type) a
 				inputs[input.Name] = input
 			}
 			actual := map[string]bool{}
-			for _, arg := range expr.NamedArgs {
+			for index := range expr.NamedArgs {
+				arg := &expr.NamedArgs[index]
 				input, exists := inputs[arg.Name]
 				if actual[arg.Name] {
 					c.error(arg.Pos, "VRB1414", fmt.Sprintf("duplicate argument %s in call %s", arg.Name, expr.Value), "provide each named argument once")
 				} else if !exists {
 					c.error(arg.Pos, "VRB1415", fmt.Sprintf("call %s has no input named %s", expr.Value, arg.Name), "use a name from the function input declarations")
 				} else {
-					argType := c.validateExpr(arg.Value, local, &input.Type)
+					argType := c.validateExpr(&arg.Value, local, &input.Type)
 					c.requireAssignable(arg.Pos, input.Type, argType, fmt.Sprintf("argument %s", arg.Name))
 				}
 				actual[arg.Name] = true
@@ -449,7 +483,8 @@ func (c *Checker) validateCall(expr ast.Expr, local scope, expected *ast.Type) a
 			if len(expr.Args) != len(fn.Inputs) {
 				c.error(expr.Pos, "VRB1410", fmt.Sprintf("call %s expects %d arguments but received %d", expr.Value, len(fn.Inputs), len(expr.Args)), "pass one argument for each input declaration")
 			}
-			for index, arg := range expr.Args {
+			for index := range expr.Args {
+				arg := &expr.Args[index]
 				if index >= len(fn.Inputs) {
 					c.validateExpr(arg, local, nil)
 					continue
@@ -463,8 +498,8 @@ func (c *Checker) validateCall(expr ast.Expr, local scope, expected *ast.Type) a
 	}
 	b, exists := builtins[expr.Value]
 	if !exists {
-		for _, arg := range expr.Args {
-			c.validateExpr(arg, local, nil)
+		for index := range expr.Args {
+			c.validateExpr(&expr.Args[index], local, nil)
 		}
 		c.error(expr.Pos, "VRB1411", fmt.Sprintf("unknown function %s", expr.Value), "declare the function or use a supported standard function")
 		return unknownType
@@ -484,8 +519,8 @@ func (c *Checker) validateCall(expr ast.Expr, local scope, expected *ast.Type) a
 		return c.validateRenderBuiltin(expr, local)
 	}
 	if len(expr.NamedArgs) > 0 {
-		for _, arg := range expr.NamedArgs {
-			c.validateExpr(arg.Value, local, nil)
+		for index := range expr.NamedArgs {
+			c.validateExpr(&expr.NamedArgs[index].Value, local, nil)
 		}
 		c.error(expr.Pos, "VRB1417", fmt.Sprintf("standard function %s does not accept a named argument block", expr.Value), "use positional arguments for this function")
 	}
@@ -493,40 +528,66 @@ func (c *Checker) validateCall(expr ast.Expr, local scope, expected *ast.Type) a
 	return c.applyTry(expr, result, expected)
 }
 
-func (c *Checker) validateBuiltin(expr ast.Expr, local scope, expected *ast.Type) ast.Type {
+func (c *Checker) validateBuiltin(expr *ast.Expr, local scope, expected *ast.Type) ast.Type {
 	if expr.Value == "json_decode" {
 		if len(expr.Args) != 2 {
-			for _, arg := range expr.Args {
-				c.validateExpr(arg, local, nil)
+			for index := range expr.Args {
+				c.validateExpr(&expr.Args[index], local, nil)
 			}
 			return unknownType
 		}
 		target := c.resolveTypeArgument(expr.Args[0])
-		body := c.validateExpr(expr.Args[1], local, &bytesType)
+		body := c.validateExpr(&expr.Args[1], local, &bytesType)
 		c.requireAssignable(expr.Args[1].Pos, bytesType, body, "JSON input")
 		return ast.Type{Name: "result", Args: []ast.Type{target, stringType}}
 	}
-
-	argumentTypes := make([]ast.Type, 0, len(expr.Args))
-	for _, arg := range expr.Args {
-		argumentTypes = append(argumentTypes, c.validateExpr(arg, local, nil))
-	}
-	if len(argumentTypes) < builtins[expr.Value].min {
+	if len(expr.Args) < builtins[expr.Value].min {
+		for index := range expr.Args {
+			c.validateExpr(&expr.Args[index], local, nil)
+		}
 		return unknownType
 	}
 
 	switch expr.Value {
 	case "add", "subtract", "multiply", "divide", "remainder":
-		c.requireNumeric(expr.Pos, argumentTypes[0], expr.Value)
-		c.requireAssignable(expr.Pos, argumentTypes[0], argumentTypes[1], expr.Value+" operands")
-		return argumentTypes[0]
+		target, hasContext := c.inferNumericContext(expr.Args, local, expected)
+		argumentTypes := c.validateNumericArguments(expr, local, target, hasContext)
+		return c.requireMatchingNumericArguments(expr, argumentTypes)
 	case "negate":
-		c.requireNumeric(expr.Pos, argumentTypes[0], expr.Value)
-		return argumentTypes[0]
+		target, hasContext := c.inferNumericContext(expr.Args, local, expected)
+		argumentTypes := c.validateNumericArguments(expr, local, target, hasContext)
+		result := c.requireMatchingNumericArguments(expr, argumentTypes)
+		if numeric.IsUnsignedType(result.Name) {
+			c.error(expr.Pos, "VRB1461", fmt.Sprintf("negate cannot produce a negative %s value", result.Name), "use a signed integer, float, or decimal value")
+		}
+		return result
 	case "greater_than", "less_than", "greater_equal", "less_equal":
-		c.requireNumeric(expr.Pos, argumentTypes[0], expr.Value)
-		c.requireAssignable(expr.Pos, argumentTypes[0], argumentTypes[1], expr.Value+" operands")
+		target, hasContext := c.inferNumericContext(expr.Args, local, nil)
+		argumentTypes := c.validateNumericArguments(expr, local, target, hasContext)
+		c.requireMatchingNumericArguments(expr, argumentTypes)
 		return boolType
+	case "ok", "error":
+		if expected == nil || expected.Name != "result" || len(expected.Args) != 2 {
+			for index := range expr.Args {
+				c.validateExpr(&expr.Args[index], local, nil)
+			}
+			c.error(expr.Pos, "VRB1432", fmt.Sprintf("cannot infer result type for %s", expr.Value), "use ok or error where a result T E output type is expected")
+			return unknownType
+		}
+		argumentIndex := 0
+		if expr.Value == "error" {
+			argumentIndex = 1
+		}
+		actual := c.validateExpr(&expr.Args[0], local, &expected.Args[argumentIndex])
+		c.requireAssignable(expr.Pos, expected.Args[argumentIndex], actual, expr.Value+" value")
+		return *expected
+	}
+
+	argumentTypes := make([]ast.Type, 0, len(expr.Args))
+	for index := range expr.Args {
+		argumentTypes = append(argumentTypes, c.validateExpr(&expr.Args[index], local, nil))
+	}
+	switch expr.Value {
 	case "and", "or":
 		c.requireAssignable(expr.Pos, boolType, argumentTypes[0], expr.Value+" operand")
 		c.requireAssignable(expr.Pos, boolType, argumentTypes[1], expr.Value+" operand")
@@ -559,17 +620,6 @@ func (c *Checker) validateBuiltin(expr ast.Expr, local scope, expected *ast.Type
 			c.error(expr.Pos, "VRB1431", fmt.Sprintf("unwrap requires optional T but received %s", argumentTypes[0].String()), "check with is_some before unwrapping an optional value")
 		}
 		return unknownType
-	case "ok", "error":
-		if expected == nil || expected.Name != "result" || len(expected.Args) != 2 {
-			c.error(expr.Pos, "VRB1432", fmt.Sprintf("cannot infer result type for %s", expr.Value), "use ok or error where a result T E output type is expected")
-			return unknownType
-		}
-		argumentIndex := 0
-		if expr.Value == "error" {
-			argumentIndex = 1
-		}
-		c.requireAssignable(expr.Pos, expected.Args[argumentIndex], argumentTypes[0], expr.Value+" value")
-		return *expected
 	case "new_uuid":
 		return uuidType
 	case "parse_uuid":
@@ -588,14 +638,14 @@ func (c *Checker) validateBuiltin(expr ast.Expr, local scope, expected *ast.Type
 	}
 }
 
-func (c *Checker) validateRenderBuiltin(expr ast.Expr, local scope) ast.Type {
+func (c *Checker) validateRenderBuiltin(expr *ast.Expr, local scope) ast.Type {
 	if len(expr.Args) != 1 {
-		for _, arg := range expr.Args {
-			c.validateExpr(arg, local, nil)
+		for index := range expr.Args {
+			c.validateExpr(&expr.Args[index], local, nil)
 		}
 		return stringType
 	}
-	resource := expr.Args[0]
+	resource := &expr.Args[0]
 	embed := c.embeds[resource.Value]
 	if resource.Kind != ast.ExprAtom || embed == nil || (embed.Kind != "html" && embed.Kind != "text") {
 		c.validateExpr(resource, local, nil)
@@ -607,8 +657,9 @@ func (c *Checker) validateRenderBuiltin(expr ast.Expr, local scope) ast.Type {
 		expectedSlots[match[1]] = true
 	}
 	actual := map[string]bool{}
-	for _, arg := range expr.NamedArgs {
-		valueType := c.validateExpr(arg.Value, local, &stringType)
+	for index := range expr.NamedArgs {
+		arg := &expr.NamedArgs[index]
+		valueType := c.validateExpr(&arg.Value, local, &stringType)
 		c.requireAssignable(arg.Pos, stringType, valueType, fmt.Sprintf("template slot %s", arg.Name))
 		if actual[arg.Name] {
 			c.error(arg.Pos, "HTML2303", fmt.Sprintf("duplicate template binding %s", arg.Name), "bind each template slot once")
@@ -626,18 +677,18 @@ func (c *Checker) validateRenderBuiltin(expr ast.Expr, local scope) ast.Type {
 	return stringType
 }
 
-func (c *Checker) validateSQLBuiltin(expr ast.Expr, local scope, expected *ast.Type) ast.Type {
+func (c *Checker) validateSQLBuiltin(expr *ast.Expr, local scope, expected *ast.Type) ast.Type {
 	if len(expr.Args) > 0 {
-		resource := expr.Args[0]
+		resource := &expr.Args[0]
 		if resource.Kind != ast.ExprAtom || c.embeds[resource.Value] == nil || c.embeds[resource.Value].Kind != "sql" {
 			c.validateExpr(resource, local, nil)
 		}
 	}
-	for _, arg := range expr.Args[1:] {
-		c.validateExpr(arg, local, nil)
+	for index := 1; index < len(expr.Args); index++ {
+		c.validateExpr(&expr.Args[index], local, nil)
 	}
-	for _, arg := range expr.NamedArgs {
-		c.validateExpr(arg.Value, local, nil)
+	for index := range expr.NamedArgs {
+		c.validateExpr(&expr.NamedArgs[index].Value, local, nil)
 	}
 	c.validateSQLCall(expr)
 	rowType := unknownType
@@ -672,7 +723,7 @@ func (c *Checker) resolveTypeArgument(expr ast.Expr) ast.Type {
 	}
 }
 
-func (c *Checker) applyTry(expr ast.Expr, result ast.Type, expected *ast.Type) ast.Type {
+func (c *Checker) applyTry(expr *ast.Expr, result ast.Type, expected *ast.Type) ast.Type {
 	if !expr.Try {
 		return result
 	}
@@ -731,6 +782,66 @@ func (c *Checker) requireAssignable(pos ast.Position, expected, actual ast.Type,
 	c.error(pos, "VRB1422", fmt.Sprintf("%s requires %s but received %s", subject, expected.String(), actual.String()), "use a value with the expected type; Verba does not apply implicit conversions")
 }
 
+func (c *Checker) inferNumericContext(expressions []ast.Expr, local scope, expected *ast.Type) (ast.Type, bool) {
+	if expected != nil && isNumeric(*expected) {
+		return *expected, true
+	}
+	foundLiteral := false
+	foundReal := false
+	for _, expression := range expressions {
+		if isNumeric(expression.ResolvedType) {
+			return expression.ResolvedType, true
+		}
+		kind := numeric.Classify(expression.Value)
+		if expression.Kind == ast.ExprAtom && kind != numeric.Invalid {
+			foundLiteral = true
+			foundReal = foundReal || kind == numeric.Real
+			continue
+		}
+		if expression.Kind == ast.ExprAtom {
+			if value, exists := local[expression.Value]; exists && isNumeric(value.typeValue) {
+				return value.typeValue, true
+			}
+		}
+		if expression.Kind == ast.ExprCall {
+			if function := c.functions[expression.Value]; function != nil && function.Output != nil && isNumeric(*function.Output) {
+				return *function.Output, true
+			}
+		}
+	}
+	if foundLiteral {
+		if foundReal {
+			return floatType, true
+		}
+		return intType, true
+	}
+	return unknownType, false
+}
+
+func (c *Checker) validateNumericArguments(expr *ast.Expr, local scope, target ast.Type, hasContext bool) []ast.Type {
+	argumentTypes := make([]ast.Type, 0, len(expr.Args))
+	for index := range expr.Args {
+		var expected *ast.Type
+		if hasContext {
+			expected = &target
+		}
+		argumentTypes = append(argumentTypes, c.validateExpr(&expr.Args[index], local, expected))
+	}
+	return argumentTypes
+}
+
+func (c *Checker) requireMatchingNumericArguments(expr *ast.Expr, argumentTypes []ast.Type) ast.Type {
+	if len(argumentTypes) == 0 {
+		return unknownType
+	}
+	result := argumentTypes[0]
+	for _, argumentType := range argumentTypes {
+		c.requireNumeric(expr.Pos, argumentType, expr.Value)
+		c.requireAssignable(expr.Pos, result, argumentType, expr.Value+" operands")
+	}
+	return result
+}
+
 func (c *Checker) requireNumeric(pos ast.Position, value ast.Type, subject string) {
 	if isUnknown(value) || isNumeric(value) {
 		return
@@ -761,14 +872,14 @@ func (c *Checker) isMatchable(value ast.Type) bool {
 		return false
 	}
 	switch value.Name {
-	case "bytes", "optional", "time":
+	case "bytes", "decimal", "optional", "time":
 		return false
 	default:
 		return true
 	}
 }
 
-func (c *Checker) validateSQLCall(expr ast.Expr) {
+func (c *Checker) validateSQLCall(expr *ast.Expr) {
 	if len(expr.Args) == 0 {
 		return
 	}
@@ -809,19 +920,6 @@ func cloneScope(source scope) scope {
 		result[name] = value
 	}
 	return result
-}
-
-func literalType(value string) (ast.Type, bool) {
-	if value == "true" || value == "false" {
-		return boolType, true
-	}
-	if _, err := strconv.ParseInt(value, 10, 64); err == nil {
-		return intType, true
-	}
-	if _, err := strconv.ParseFloat(value, 64); err == nil {
-		return floatType, true
-	}
-	return ast.Type{}, false
 }
 
 func sameType(left, right ast.Type) bool {

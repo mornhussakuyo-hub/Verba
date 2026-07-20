@@ -63,6 +63,8 @@ verba help
 - `get`、`is` / `is not`、`try call` 和命名参数块。
 - JSON 与正则语法校验、HTML/text 模板槽位检查，以及 SQL 命名参数和 `with` 绑定的一致性检查。
 - 类型化作用域、函数参数、字段路径、条件、返回路径、optional 和 result / try 检查。
+- 数值字面量按参数、返回值、赋值和算术上下文定型，并在编译期检查整数宽度与浮点范围。
+- `decimal` 使用任意精度精确运算和无损 JSON number 编解码，不会降为 `float64`。
 - JSON 解码与 UUID 解析使用真实 `result` 错误路径；HTML 模板默认转义，正则资源预编译。
 - JSON、文本和空 HTTP 响应的 Go 代码生成。
 - `use` 能力与 `verba.toml` 依赖解析、缺失能力检查和确定性 capability 审计。
@@ -88,7 +90,7 @@ end
 
 ## 入门教程
 
-从 [Verba 入门教程](docs/tutorial/README.md) 开始，按章节学习安装、基础语法、函数与类型、HTTP、语法岛和工具链。每个核心章节都在 `learn/` 下提供对应项目。
+从 [Verba 入门教程](docs/tutorial/README.md) 开始，通过九个章节学习安装、基础语法、函数与类型、HTTP、语法岛、工具链、项目清单和精确数值。六个可执行项目位于 `learn/`。
 
 ## 开发
 

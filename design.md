@@ -363,7 +363,7 @@ end
 | 结构           | record enum                                                     |
 | 构造类型       | optional T  list T  map K V  result T E                         |
 
-decimal 用于金额等需要十进制定点语义的场景；float 不应用于货币。uuid、time、duration、url、path 是强类型值，而不是字符串别名。
+int 与 uint 固定为 64 位，不随编译器宿主或目标架构变化。decimal 用于金额等需要精确十进制语义的场景；字面量和运算使用任意精度有理数，不经过二进制浮点。有限十进制可以无损编解码为 JSON number；除法产生的非终止十进制必须显式处理，不能静默舍入。float 不应用于货币。uuid、time、duration、url、path 是强类型值，而不是字符串别名。
 
 ## 6.2 无隐式 null
 

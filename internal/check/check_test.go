@@ -252,6 +252,132 @@ end
 	}
 }
 
+func TestNumericLiteralsUseContextualWidths(t *testing.T) {
+	source := []byte(`module example
+function small_add
+input value int8
+output int8
+begin
+    return call add value 1
+end
+function caller
+begin
+    call small_add 127
+end
+`)
+	file, parseDiagnostics := parser.Parse("numeric.vrb", source)
+	if len(parseDiagnostics) != 0 {
+		t.Fatalf("parse diagnostics: %#v", parseDiagnostics)
+	}
+	if diagnostics := Files([]*ast.File{file}); len(diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", diagnostics)
+	}
+	function := file.Decls[0].(*ast.Function)
+	returned := function.Body[0].(*ast.ReturnStmt)
+	if returned.Value.ResolvedType.Name != "int8" || returned.Value.Args[1].ResolvedType.Name != "int8" {
+		t.Fatalf("arithmetic literals were not resolved as int8: %#v", returned.Value)
+	}
+}
+
+func TestNumericLiteralRangeDiagnostics(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+	}{
+		{
+			name: "function argument",
+			source: `module example
+function take
+input value uint8
+begin
+end
+function caller
+begin
+    call take 256
+end
+`,
+		},
+		{
+			name: "set target",
+			source: `module example
+function seed
+output int8
+begin
+    return 0
+end
+function update
+begin
+    var value to be call seed
+    set value to be 128
+end
+`,
+		},
+		{
+			name: "unsigned negative",
+			source: `module example
+function invalid
+output uint
+begin
+    return -1
+end
+`,
+		},
+		{
+			name: "float32 overflow",
+			source: `module example
+function invalid
+output float32
+begin
+    return 3.4028236e38
+end
+`,
+		},
+		{
+			name: "default integer overflow",
+			source: `module example
+function invalid
+begin
+    let value to be 9223372036854775808
+end
+`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if diagnostics := checkSource(t, []byte(test.source)); !hasCode(diagnostics, "VRB1460") {
+				t.Fatalf("expected VRB1460, got %#v", diagnostics)
+			}
+		})
+	}
+}
+
+func TestDecimalArithmeticIsContextuallyTyped(t *testing.T) {
+	source := []byte(`module example
+function exact_total
+output decimal
+begin
+    return call add 0.1 0.2
+end
+`)
+	file, parseDiagnostics := parser.Parse("decimal.vrb", source)
+	if len(parseDiagnostics) != 0 {
+		t.Fatalf("parse diagnostics: %#v", parseDiagnostics)
+	}
+	if diagnostics := Files([]*ast.File{file}); len(diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", diagnostics)
+	}
+	function := file.Decls[0].(*ast.Function)
+	returned := function.Body[0].(*ast.ReturnStmt)
+	if returned.Value.ResolvedType.Name != "decimal" {
+		t.Fatalf("decimal expression resolved as %s", returned.Value.ResolvedType.String())
+	}
+	for _, argument := range returned.Value.Args {
+		if argument.ResolvedType.Name != "decimal" {
+			t.Fatalf("decimal argument resolved as %s", argument.ResolvedType.String())
+		}
+	}
+}
+
 func checkSource(t *testing.T, source []byte) []diagnostic.Diagnostic {
 	t.Helper()
 	file, parseDiagnostics := parser.Parse("test.vrb", source)

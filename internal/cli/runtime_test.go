@@ -25,11 +25,59 @@ record uuid_request
 begin
     field id string
 end
+record decimal_request
+begin
+    field amount decimal
+end
+function exact_total
+output decimal
+begin
+    return call add 0.1 0.2
+end
+function repeating_decimal
+output decimal
+begin
+    return call divide 1 3
+end
+function fractional_remainder
+output float32
+begin
+    return call remainder 5.5 2
+end
 route health
 method get
 path /health
 begin
     respond text 200 ready
+end
+route money
+method get
+path /money
+begin
+    let total to be call exact_total
+    respond json 200 total
+end
+route decimal_echo
+method post
+path /decimal
+begin
+    let payload to be try call json_decode decimal_request request_body
+    let amount to be get payload amount
+    respond json 200 amount
+end
+route repeating
+method get
+path /repeating
+begin
+    let value to be call repeating_decimal
+    respond json 200 value
+end
+route remainder
+method get
+path /remainder
+begin
+    let value to be call fractional_remainder
+    respond json 200 value
 end
 route validate
 method post
@@ -71,12 +119,14 @@ end
 	if err := server.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
+	stopServer := func() {
 		if server.Process != nil {
 			_ = server.Process.Kill()
 			_, _ = server.Process.Wait()
+			server.Process = nil
 		}
-	})
+	}
+	t.Cleanup(stopServer)
 
 	client := &http.Client{Timeout: 2 * time.Second}
 	baseURL := "http://" + address
@@ -95,6 +145,55 @@ end
 		t.Fatalf("unexpected valid response: status=%d body=%q", validResponse.StatusCode, validBody)
 	}
 
+	moneyResponse, err := client.Get(baseURL + "/money")
+	if err != nil {
+		t.Fatal(err)
+	}
+	moneyBody, err := io.ReadAll(moneyResponse.Body)
+	_ = moneyResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moneyResponse.StatusCode != http.StatusOK || strings.TrimSpace(string(moneyBody)) != "0.3" {
+		t.Fatalf("unexpected decimal response: status=%d body=%q", moneyResponse.StatusCode, moneyBody)
+	}
+
+	decimalResponse, err := client.Post(baseURL+"/decimal", "application/json", strings.NewReader(`{"amount":1.2300}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decimalBody, err := io.ReadAll(decimalResponse.Body)
+	_ = decimalResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decimalResponse.StatusCode != http.StatusOK || strings.TrimSpace(string(decimalBody)) != "1.23" {
+		t.Fatalf("unexpected decoded decimal response: status=%d body=%q", decimalResponse.StatusCode, decimalBody)
+	}
+
+	repeatingResponse, err := client.Get(baseURL + "/repeating")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, repeatingResponse.Body)
+	_ = repeatingResponse.Body.Close()
+	if repeatingResponse.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("non-terminating decimal returned status %d, want 500", repeatingResponse.StatusCode)
+	}
+
+	remainderResponse, err := client.Get(baseURL + "/remainder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remainderBody, err := io.ReadAll(remainderResponse.Body)
+	_ = remainderResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remainderResponse.StatusCode != http.StatusOK || strings.TrimSpace(string(remainderBody)) != "1.5" {
+		t.Fatalf("unexpected float remainder response: status=%d body=%q", remainderResponse.StatusCode, remainderBody)
+	}
+
 	invalidResponse, err := client.Post(baseURL+"/validate", "application/json", strings.NewReader(`{"id":`))
 	if err != nil {
 		t.Fatal(err)
@@ -104,6 +203,7 @@ end
 	if invalidResponse.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("invalid JSON returned status %d, want 500", invalidResponse.StatusCode)
 	}
+	stopServer()
 }
 
 func waitForHTTP(t *testing.T, client *http.Client, url string, serverOutput *bytes.Buffer) {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/verba-lang/verba/internal/ast"
 	"github.com/verba-lang/verba/internal/diagnostic"
+	"github.com/verba-lang/verba/internal/numeric"
 )
 
 type emitter struct {
@@ -34,6 +35,8 @@ type featureSet struct {
 	randomUUID bool
 	parseUUID  bool
 	result     bool
+	decimal    bool
+	floatMath  bool
 }
 
 func Files(files []*ast.File) ([]byte, []diagnostic.Diagnostic) {
@@ -167,6 +170,10 @@ func (e *emitter) scanType(value ast.Type) {
 		e.features.result = true
 	case "time", "duration":
 		e.features.time = true
+	case "decimal":
+		e.features.decimal = true
+		e.features.regex = true
+		e.features.strings = true
 	}
 	for _, argument := range value.Args {
 		e.scanType(argument)
@@ -217,11 +224,20 @@ func (e *emitter) scanStatements(statements []ast.Stmt) {
 }
 
 func (e *emitter) scanExpr(expr ast.Expr) {
+	if expr.ResolvedType.Name == "decimal" {
+		e.features.decimal = true
+		e.features.regex = true
+		e.features.strings = true
+	}
 	if expr.Try {
 		e.features.result = true
 	}
 	if expr.Kind == ast.ExprCall {
 		switch expr.Value {
+		case "remainder":
+			if expr.ResolvedType.Name == "float32" || expr.ResolvedType.Name == "float64" {
+				e.features.floatMath = true
+			}
 		case "trim", "lowercase", "uppercase", "contains", "starts_with", "concat":
 			e.features.strings = true
 		case "regex_match":
@@ -255,7 +271,84 @@ func (e *emitter) scanExpr(expr ast.Expr) {
 	}
 }
 
+func (e *emitter) emitDecimalRuntime() {
+	e.line(0, "var decimalLiteralPattern = regexp.MustCompile(%s)", strconv.Quote(`^[+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$`))
+	e.line(0, "var decimalJSONPattern = regexp.MustCompile(%s)", strconv.Quote(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$`))
+	e.line(0, "")
+	e.line(0, "type Decimal struct {")
+	e.line(1, "value *big.Rat")
+	e.line(0, "}")
+	e.line(0, "")
+	e.line(0, "func newDecimal(input string) Decimal {")
+	e.line(1, "if !decimalLiteralPattern.MatchString(input) { panic(\"invalid compiler-generated decimal literal\") }")
+	e.line(1, "value, ok := new(big.Rat).SetString(input)")
+	e.line(1, "if !ok { panic(\"invalid compiler-generated decimal literal\") }")
+	e.line(1, "return Decimal{value: value}")
+	e.line(0, "}")
+	e.line(0, "")
+	e.line(0, "func (value Decimal) rat() *big.Rat {")
+	e.line(1, "if value.value == nil { return new(big.Rat) }")
+	e.line(1, "return value.value")
+	e.line(0, "}")
+	e.line(0, "")
+	e.line(0, "func (value Decimal) Add(other Decimal) Decimal { return Decimal{value: new(big.Rat).Add(value.rat(), other.rat())} }")
+	e.line(0, "func (value Decimal) Sub(other Decimal) Decimal { return Decimal{value: new(big.Rat).Sub(value.rat(), other.rat())} }")
+	e.line(0, "func (value Decimal) Mul(other Decimal) Decimal { return Decimal{value: new(big.Rat).Mul(value.rat(), other.rat())} }")
+	e.line(0, "func (value Decimal) Quo(other Decimal) Decimal { return Decimal{value: new(big.Rat).Quo(value.rat(), other.rat())} }")
+	e.line(0, "func (value Decimal) Neg() Decimal { return Decimal{value: new(big.Rat).Neg(value.rat())} }")
+	e.line(0, "func (value Decimal) Cmp(other Decimal) int { return value.rat().Cmp(other.rat()) }")
+	e.line(0, "")
+	e.line(0, "func (value Decimal) Rem(other Decimal) Decimal {")
+	e.line(1, "quotient := new(big.Rat).Quo(value.rat(), other.rat())")
+	e.line(1, "whole := new(big.Int).Quo(quotient.Num(), quotient.Denom())")
+	e.line(1, "product := new(big.Rat).Mul(new(big.Rat).SetInt(whole), other.rat())")
+	e.line(1, "return Decimal{value: new(big.Rat).Sub(value.rat(), product)}")
+	e.line(0, "}")
+	e.line(0, "")
+	e.line(0, "func decimalText(value *big.Rat) (string, error) {")
+	e.line(1, "denominator := new(big.Int).Set(value.Denom())")
+	e.line(1, "two := big.NewInt(2)")
+	e.line(1, "five := big.NewInt(5)")
+	e.line(1, "twos := 0")
+	e.line(1, "fives := 0")
+	e.line(1, "for new(big.Int).Mod(denominator, two).Sign() == 0 { denominator.Quo(denominator, two); twos++ }")
+	e.line(1, "for new(big.Int).Mod(denominator, five).Sign() == 0 { denominator.Quo(denominator, five); fives++ }")
+	e.line(1, "if denominator.Cmp(big.NewInt(1)) != 0 { return \"\", fmt.Errorf(\"decimal %%s has no finite JSON representation\", value.RatString()) }")
+	e.line(1, "scale := twos")
+	e.line(1, "if fives > scale { scale = fives }")
+	e.line(1, "text := value.FloatString(scale)")
+	e.line(1, "if strings.Contains(text, \".\") { text = strings.TrimRight(strings.TrimRight(text, \"0\"), \".\") }")
+	e.line(1, "if text == \"-0\" || text == \"\" { text = \"0\" }")
+	e.line(1, "return text, nil")
+	e.line(0, "}")
+	e.line(0, "")
+	e.line(0, "func (value Decimal) String() string {")
+	e.line(1, "text, err := decimalText(value.rat())")
+	e.line(1, "if err != nil { return value.rat().RatString() }")
+	e.line(1, "return text")
+	e.line(0, "}")
+	e.line(0, "")
+	e.line(0, "func (value Decimal) MarshalJSON() ([]byte, error) {")
+	e.line(1, "text, err := decimalText(value.rat())")
+	e.line(1, "if err != nil { return nil, err }")
+	e.line(1, "return []byte(text), nil")
+	e.line(0, "}")
+	e.line(0, "")
+	e.line(0, "func (value *Decimal) UnmarshalJSON(data []byte) error {")
+	e.line(1, "input := string(data)")
+	e.line(1, "if !decimalJSONPattern.MatchString(input) { return fmt.Errorf(\"invalid decimal JSON number %%q\", input) }")
+	e.line(1, "parsed, ok := new(big.Rat).SetString(input)")
+	e.line(1, "if !ok { return fmt.Errorf(\"invalid decimal JSON number %%q\", input) }")
+	e.line(1, "value.value = parsed")
+	e.line(1, "return nil")
+	e.line(0, "}")
+	e.line(0, "")
+}
+
 func (e *emitter) emitRuntime() {
+	if e.features.decimal {
+		e.emitDecimalRuntime()
+	}
 	if e.features.template {
 		e.line(0, `var templateSlotPattern = regexp.MustCompile(%s)`, strconv.Quote(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`))
 	}
@@ -330,6 +423,12 @@ func (e *emitter) emitProgram() {
 	}
 	if e.features.html {
 		imports = append(imports, "html")
+	}
+	if e.features.floatMath {
+		imports = append(imports, "math")
+	}
+	if e.features.decimal {
+		imports = append(imports, "math/big")
 	}
 	if e.features.regex {
 		imports = append(imports, "regexp")
@@ -538,10 +637,21 @@ func (e *emitter) emitResultReturn(expr ast.Expr, output ast.Type, indent int) {
 func (e *emitter) emitRespond(stmt *ast.RespondStmt, indent int) {
 	switch stmt.Format {
 	case "json":
-		e.line(indent, `w.Header().Set("Content-Type", "application/json; charset=utf-8")`)
-		e.line(indent, "w.WriteHeader(%d)", stmt.Status)
 		if stmt.Value != nil {
-			e.line(indent, "_ = json.NewEncoder(w).Encode(%s)", e.expr(*stmt.Value))
+			dataName := e.nextTemp()
+			errorName := e.nextTemp()
+			e.line(indent, "%s, %s := json.Marshal(%s)", dataName, errorName, e.expr(*stmt.Value))
+			e.line(indent, "if %s != nil {", errorName)
+			e.line(indent+1, "http.Error(w, %s.Error(), http.StatusInternalServerError)", errorName)
+			e.line(indent+1, "return")
+			e.line(indent, "}")
+			e.line(indent, `w.Header().Set("Content-Type", "application/json; charset=utf-8")`)
+			e.line(indent, "w.WriteHeader(%d)", stmt.Status)
+			e.line(indent, "_, _ = w.Write(%s)", dataName)
+			e.line(indent, `_, _ = w.Write([]byte("\n"))`)
+		} else {
+			e.line(indent, `w.Header().Set("Content-Type", "application/json; charset=utf-8")`)
+			e.line(indent, "w.WriteHeader(%d)", stmt.Status)
 		}
 	case "empty":
 		e.line(indent, "w.WriteHeader(%d)", stmt.Status)
@@ -563,6 +673,14 @@ func (e *emitter) expr(expr ast.Expr) string {
 		if enum, exists := e.enumCases[expr.Value]; exists {
 			return enum
 		}
+		if numeric.Classify(expr.Value) != numeric.Invalid {
+			if expr.ResolvedType.Name == "decimal" {
+				return "newDecimal(" + strconv.Quote(expr.Value) + ")"
+			}
+			if numeric.IsType(expr.ResolvedType.Name) {
+				return goType(expr.ResolvedType) + "(" + expr.Value + ")"
+			}
+		}
 		return safeName(expr.Value)
 	case ast.ExprGet:
 		parts := make([]string, 0, len(expr.Args))
@@ -575,6 +693,13 @@ func (e *emitter) expr(expr ast.Expr) string {
 		}
 		return strings.Join(parts, ".")
 	case ast.ExprRelation:
+		if len(expr.Args) == 2 && expr.Args[0].ResolvedType.Name == "decimal" {
+			comparison := "== 0"
+			if expr.Not {
+				comparison = "!= 0"
+			}
+			return fmt.Sprintf("(%s.Cmp(%s) %s)", e.expr(expr.Args[0]), e.expr(expr.Args[1]), comparison)
+		}
 		op := "=="
 		if expr.Not {
 			op = "!="
@@ -604,24 +729,60 @@ func (e *emitter) call(expr ast.Expr) string {
 	}
 	switch expr.Value {
 	case "add":
+		if expr.ResolvedType.Name == "decimal" {
+			return args[0] + ".Add(" + args[1] + ")"
+		}
 		return "(" + args[0] + " + " + args[1] + ")"
 	case "subtract":
+		if expr.ResolvedType.Name == "decimal" {
+			return args[0] + ".Sub(" + args[1] + ")"
+		}
 		return "(" + args[0] + " - " + args[1] + ")"
 	case "multiply":
+		if expr.ResolvedType.Name == "decimal" {
+			return args[0] + ".Mul(" + args[1] + ")"
+		}
 		return "(" + args[0] + " * " + args[1] + ")"
 	case "divide":
+		if expr.ResolvedType.Name == "decimal" {
+			return args[0] + ".Quo(" + args[1] + ")"
+		}
 		return "(" + args[0] + " / " + args[1] + ")"
 	case "remainder":
+		if expr.ResolvedType.Name == "decimal" {
+			return args[0] + ".Rem(" + args[1] + ")"
+		}
+		if expr.ResolvedType.Name == "float64" {
+			return "math.Mod(" + args[0] + ", " + args[1] + ")"
+		}
+		if expr.ResolvedType.Name == "float32" {
+			return "float32(math.Mod(float64(" + args[0] + "), float64(" + args[1] + ")))"
+		}
 		return "(" + args[0] + " % " + args[1] + ")"
 	case "negate":
+		if expr.ResolvedType.Name == "decimal" {
+			return args[0] + ".Neg()"
+		}
 		return "(-" + args[0] + ")"
 	case "greater_than":
+		if len(expr.Args) > 0 && expr.Args[0].ResolvedType.Name == "decimal" {
+			return "(" + args[0] + ".Cmp(" + args[1] + ") > 0)"
+		}
 		return "(" + args[0] + " > " + args[1] + ")"
 	case "less_than":
+		if len(expr.Args) > 0 && expr.Args[0].ResolvedType.Name == "decimal" {
+			return "(" + args[0] + ".Cmp(" + args[1] + ") < 0)"
+		}
 		return "(" + args[0] + " < " + args[1] + ")"
 	case "greater_equal":
+		if len(expr.Args) > 0 && expr.Args[0].ResolvedType.Name == "decimal" {
+			return "(" + args[0] + ".Cmp(" + args[1] + ") >= 0)"
+		}
 		return "(" + args[0] + " >= " + args[1] + ")"
 	case "less_equal":
+		if len(expr.Args) > 0 && expr.Args[0].ResolvedType.Name == "decimal" {
+			return "(" + args[0] + ".Cmp(" + args[1] + ") <= 0)"
+		}
 		return "(" + args[0] + " <= " + args[1] + ")"
 	case "and":
 		return "(" + args[0] + " && " + args[1] + ")"
@@ -705,12 +866,16 @@ func (e *emitter) emitMain() {
 
 func goType(t ast.Type) string {
 	switch t.Name {
-	case "bool", "string", "int", "uint", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float32", "float64":
+	case "bool", "string", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float32", "float64":
 		return t.Name
+	case "int":
+		return "int64"
+	case "uint":
+		return "uint64"
 	case "bytes":
 		return "[]byte"
 	case "decimal":
-		return "float64"
+		return "Decimal"
 	case "uuid", "url", "path":
 		return "string"
 	case "time":
@@ -755,11 +920,7 @@ func safeName(value string) string {
 }
 
 func isNumber(value string) bool {
-	if _, err := strconv.ParseInt(value, 10, 64); err == nil {
-		return true
-	}
-	_, err := strconv.ParseFloat(value, 64)
-	return err == nil
+	return numeric.Classify(value) != numeric.Invalid
 }
 
 func routeParameters(path string) []string {
