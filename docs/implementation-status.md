@@ -4,9 +4,22 @@ This document tracks implementation against `design.md`. A feature is marked com
 
 ## Current milestone
 
-Verba is an executable `0.1.0` vertical slice. It can parse, format, check, generate Go, and build small HTTP services. It is not yet the complete MVP described by the design document.
+Verba is an executable `0.1.0` compiler that satisfies the explicit MVP support list and all eight acceptance criteria in `design.md`. This does not mean the broader language design is complete: imported source modules, a stable typed IR, richer adapters, and language-server tooling remain future work.
 
 The current work focuses on a typed semantic pipeline before expanding the runtime. Type-aware scopes, function arguments, field access, conditions, returns, optional values, `result` propagation, and typed `match` expressions are implemented and covered by checker tests.
+
+## MVP acceptance evidence
+
+| Criterion | Evidence |
+| --- | --- |
+| Complete user service builds | `learn/08_user_service` is checked, audited, and built by `scripts/verify.ps1` on Windows and Ubuntu |
+| Invalid JSON reports an exact position | `TestInvalidJSON` asserts the Unicode-aware source line and column |
+| Missing or extra SQL bindings fail | `TestSQLMissingAndExtraBindings` asserts `SQL2107` and `SQL2103` |
+| Optional access requires unwrap | `TestOptionalFieldRequiresUnwrap` asserts `VRB1440` |
+| Block mismatches name their declaration | `TestMissingEndProducesDiagnostic` covers record, enum, function, route, nested statement, and argument blocks |
+| Formatter is idempotent | `TestSourceIsIdempotentAndPreservesIsland` runs formatting twice; verification checks every project |
+| Generated routes handle required outcomes | `TestBuildAndRunHTTPService` executes 200 success, 400 parse failure, 404 not found, and 500 database failure paths |
+| Compiler stages have tests | `go test ./...` covers lexer, parser, checker, region scanner, emitter, compiler, CLI, and adapters |
 
 ## Compiler pipeline
 

@@ -25,6 +25,8 @@ type parser struct {
 	regions     region.Result
 	lines       []sourceLine
 	index       int
+	declKind    string
+	declName    string
 	diagnostics []diagnostic.Diagnostic
 }
 
@@ -195,7 +197,10 @@ func (p *parser) parseFunction(parts []string) ast.Decl {
 		}
 		lineParts := strings.Fields(p.current().text)
 		if len(lineParts) > 0 && lineParts[0] == "begin" {
+			previousKind, previousName := p.declKind, p.declName
+			p.declKind, p.declName = "function", name
 			fn.Body = p.parseBlock("function", name)
+			p.declKind, p.declName = previousKind, previousName
 			if !ok {
 				return nil
 			}
@@ -241,7 +246,10 @@ func (p *parser) parseRoute(parts []string) ast.Decl {
 		line := p.current().text
 		lineParts := strings.Fields(line)
 		if len(lineParts) > 0 && lineParts[0] == "begin" {
+			previousKind, previousName := p.declKind, p.declName
+			p.declKind, p.declName = "route", name
 			route.Body = p.parseBlock("route", name)
+			p.declKind, p.declName = previousKind, previousName
 			if !ok {
 				return nil
 			}
@@ -294,7 +302,7 @@ func (p *parser) parseEmbed(parts []string) ast.Decl {
 
 func (p *parser) parseBlock(ownerKind, ownerName string) []ast.Stmt {
 	if p.done() || p.current().text != "begin" {
-		p.error(p.position(), "VRB0301", fmt.Sprintf("expected begin for %s %s", ownerKind, ownerName), "add begin on its own line")
+		p.error(p.position(), "VRB0301", fmt.Sprintf("expected begin for %s", p.describeOwner(ownerKind, ownerName)), "add begin on its own line")
 		return nil
 	}
 	p.index++
@@ -312,7 +320,7 @@ func (p *parser) parseBlock(ownerKind, ownerName string) []ast.Stmt {
 			statements = append(statements, stmt)
 		}
 	}
-	p.error(ast.Position{File: p.path, Line: max(1, len(p.lines)), Column: 1}, "VRB0311", fmt.Sprintf("expected end for %s %s before end of file", ownerKind, ownerName), "close the block with end")
+	p.error(ast.Position{File: p.path, Line: max(1, len(p.lines)), Column: 1}, "VRB0311", fmt.Sprintf("expected end for %s before end of file", p.describeOwner(ownerKind, ownerName)), "close the block with end")
 	return statements
 }
 
@@ -473,7 +481,7 @@ func (p *parser) parseMatch(parts []string, pos ast.Position) ast.Stmt {
 		body := p.parseBlock("match case", strings.Join(caseParts[1:], " "))
 		statement.Cases = append(statement.Cases, ast.MatchCase{Pattern: pattern, Body: body, Pos: patternPos})
 	}
-	p.error(pos, "VRB0414", "match is missing end", "close the match after its cases with end")
+	p.error(pos, "VRB0414", fmt.Sprintf("%s is missing end", p.describeOwner("match", "value")), "close the match after its cases with end")
 	return statement
 }
 
@@ -570,17 +578,25 @@ func (p *parser) attachNamedArguments(expr *ast.Expr) {
 		expr.NamedArgs = append(expr.NamedArgs, ast.NamedArg{Name: parts[1], Value: p.parseExpr(parts[2:], pos), Pos: pos})
 		p.index++
 	}
-	p.error(expr.Pos, "VRB0511", fmt.Sprintf("argument block for call %s is missing end", expr.Value), "close the argument block with end")
+	p.error(expr.Pos, "VRB0511", fmt.Sprintf("%s is missing end", p.describeOwner("argument block for call", expr.Value)), "close the argument block with end")
 }
 
 func (p *parser) consumeBegin(kind, name string) bool {
 	p.skipTrivia()
 	if p.done() || p.current().text != "begin" {
-		p.error(p.position(), "VRB0301", fmt.Sprintf("expected begin for %s %s", kind, name), "add begin on its own line")
+		p.error(p.position(), "VRB0301", fmt.Sprintf("expected begin for %s", p.describeOwner(kind, name)), "add begin on its own line")
 		return false
 	}
 	p.index++
 	return true
+}
+
+func (p *parser) describeOwner(kind, name string) string {
+	owner := strings.TrimSpace(kind + " " + name)
+	if p.declKind != "" && (kind != p.declKind || name != p.declName) {
+		owner += fmt.Sprintf(" in %s %s", p.declKind, p.declName)
+	}
+	return owner
 }
 
 func (p *parser) declarationName(parts []string, kind string) (string, bool) {

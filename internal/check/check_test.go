@@ -8,7 +8,7 @@ import (
 	"github.com/verba-lang/verba/internal/parser"
 )
 
-func TestSQLMissingBinding(t *testing.T) {
+func TestSQLMissingAndExtraBindings(t *testing.T) {
 	source := []byte(`module example
 embed sql find_user until end_sql
 SELECT id FROM users WHERE id = :id AND tenant = :tenant;
@@ -19,6 +19,7 @@ begin
     call sql_one find_user
     begin
         with id id
+        with unused id
     end
 end
 `)
@@ -27,8 +28,10 @@ end
 		t.Fatalf("parse diagnostics: %#v", parseDiagnostics)
 	}
 	diagnostics := Files([]*ast.File{file})
-	if !hasCode(diagnostics, "SQL2107") {
-		t.Fatalf("expected SQL2107, got %#v", diagnostics)
+	for _, code := range []string{"SQL2103", "SQL2107"} {
+		if !hasCode(diagnostics, code) {
+			t.Errorf("expected %s, got %#v", code, diagnostics)
+		}
 	}
 }
 
@@ -163,11 +166,11 @@ end
 }
 
 func TestInvalidJSON(t *testing.T) {
-	source := []byte("module example\nembed json value until done\n{bad}\ndone\n")
+	source := []byte("module example\nembed json value until done\n{\n  \"名称\": true,\n  bad\n}\ndone\n")
 	file, _ := parser.Parse("json.vrb", source)
 	diagnostics := Files([]*ast.File{file})
-	if !hasCode(diagnostics, "JSON2001") {
-		t.Fatalf("expected JSON2001, got %#v", diagnostics)
+	if len(diagnostics) != 1 || diagnostics[0].Code != "JSON2001" || diagnostics[0].Line != 5 || diagnostics[0].Column != 3 {
+		t.Fatalf("expected JSON2001 at 5:3, got %#v", diagnostics)
 	}
 }
 

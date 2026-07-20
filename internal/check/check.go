@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/verba-lang/verba/internal/ast"
 	"github.com/verba-lang/verba/internal/diagnostic"
@@ -211,10 +212,13 @@ func (c *Checker) validateEmbed(embed *ast.Embed) {
 		var value any
 		if err := json.Unmarshal([]byte(embed.Raw), &value); err != nil {
 			line := embed.Pos.Line + 1
+			column := 1
 			if syntax, ok := err.(*json.SyntaxError); ok {
-				line += strings.Count(embed.Raw[:min(int(syntax.Offset), len(embed.Raw))], "\n")
+				lineOffset, columnOffset := jsonErrorPosition(embed.Raw, syntax.Offset)
+				line += lineOffset
+				column = columnOffset
 			}
-			c.error(ast.Position{File: embed.Pos.File, Line: line, Column: 1}, "JSON2001", fmt.Sprintf("invalid JSON in island %s: %v", embed.Name, err), "fix the JSON syntax inside the island")
+			c.error(ast.Position{File: embed.Pos.File, Line: line, Column: column}, "JSON2001", fmt.Sprintf("invalid JSON in island %s: %v", embed.Name, err), "fix the JSON syntax inside the island")
 		}
 	case "regex":
 		if _, err := regexp.Compile(embed.Raw); err != nil {
@@ -229,6 +233,22 @@ func (c *Checker) validateEmbed(embed *ast.Embed) {
 	default:
 		c.error(embed.Pos, "VRB1141", fmt.Sprintf("unknown island adapter %s", embed.Kind), "supported adapters are json, sql, html, regex, text, and comment")
 	}
+}
+
+func jsonErrorPosition(raw string, offset int64) (int, int) {
+	index := int(offset) - 1
+	if index < 0 {
+		index = 0
+	}
+	if index > len(raw) {
+		index = len(raw)
+	}
+	prefix := raw[:index]
+	line := strings.Count(prefix, "\n")
+	if newline := strings.LastIndexByte(prefix, '\n'); newline >= 0 {
+		prefix = prefix[newline+1:]
+	}
+	return line, utf8.RuneCountInString(prefix) + 1
 }
 
 func (c *Checker) validateType(t ast.Type, pos ast.Position) {

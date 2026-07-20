@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/verba-lang/verba/internal/ast"
@@ -37,9 +38,38 @@ end
 }
 
 func TestMissingEndProducesDiagnostic(t *testing.T) {
-	_, diagnostics := Parse("broken.vrb", []byte("module broken\nfunction f\nbegin\nlet x to be 1\n"))
-	if len(diagnostics) == 0 || diagnostics[0].Code != "VRB0311" {
-		t.Fatalf("expected VRB0311, got %#v", diagnostics)
+	tests := []struct {
+		name   string
+		source string
+		owner  string
+	}{
+		{name: "record", source: "module broken\nrecord profile\nbegin\nfield name string\n", owner: "record profile"},
+		{name: "enum", source: "module broken\nenum role\nbegin\ncase admin\n", owner: "enum role"},
+		{name: "function", source: "module broken\nfunction load\nbegin\nlet value to be 1\n", owner: "function load"},
+		{name: "route", source: "module broken\nroute health\nmethod get\npath /health\nbegin\nrespond empty 204\n", owner: "route health"},
+		{name: "nested if", source: "module broken\nfunction load\nbegin\nif true\nbegin\nreturn\n", owner: "function load"},
+		{name: "nested match", source: "module broken\nfunction load\nbegin\nmatch true\nbegin\ncase true\nbegin\nreturn\n", owner: "function load"},
+		{name: "argument block", source: "module broken\nfunction load\nbegin\ncall fetch\nbegin\nwith id 1\n", owner: "function load"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, diagnostics := Parse("broken.vrb", []byte(test.source))
+			if len(diagnostics) == 0 {
+				t.Fatal("expected a missing-end diagnostic")
+			}
+			found := false
+			for _, item := range diagnostics {
+				if item.Code == "VRB0203" || item.Code == "VRB0212" || item.Code == "VRB0311" || item.Code == "VRB0414" || item.Code == "VRB0511" {
+					found = true
+					if !strings.Contains(item.Message, test.owner) {
+						t.Fatalf("diagnostic does not name %s: %#v", test.owner, item)
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("expected a missing-end diagnostic, got %#v", diagnostics)
+			}
+		})
 	}
 }
 
