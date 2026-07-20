@@ -49,6 +49,8 @@ verba help
 
 目录输入会递归查找 `.vrb` 文件，并跳过隐藏目录、`build`、`dist` 和 `vendor`。
 
+项目可以提供 `verba.toml`，声明项目名、语义化版本、Go 目标、PostgreSQL schema 快照和依赖元数据。编译器会向父目录查找最近的清单，并检查清单名与源码 `module` 一致。没有清单的项目仍保持兼容。
+
 ## 0.1.0 支持范围
 
 前端支持：
@@ -99,6 +101,8 @@ go vet ./...
 
 ```text
 cmd/verba              CLI 入口
+internal/source        UTF-8 源文件、字节偏移与行列映射
+internal/manifest      TOML 项目清单发现与验证
 internal/parser        行导向解析器与语法岛扫描
 internal/check         名称、类型、作用域和适配器检查
 internal/format        幂等格式化器

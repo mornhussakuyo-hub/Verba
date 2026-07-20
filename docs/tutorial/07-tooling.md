@@ -69,4 +69,4 @@ verba run learn/04_http
 
 先运行 `verba check`。如果合法程序仍产生无效 Go，请使用 `--emit-go` 保存生成源码，并在 issue 中附上 Verba 源码、诊断和版本号。
 
-教程到这里已经覆盖当前稳定垂直切片。接下来可以阅读仓库根目录的 `design.md` 了解完整语言方向，或查看 `docs/implementation-status.md` 跟踪实现进度。
+下一章：[项目清单](08-project-manifest.md)。

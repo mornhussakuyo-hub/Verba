@@ -2,6 +2,7 @@ package ast
 
 type Position struct {
 	File   string
+	Offset int
 	Line   int
 	Column int
 }

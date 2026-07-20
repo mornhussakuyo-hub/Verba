@@ -15,6 +15,7 @@ import (
 	"github.com/verba-lang/verba/internal/compiler"
 	"github.com/verba-lang/verba/internal/diagnostic"
 	verbaformat "github.com/verba-lang/verba/internal/format"
+	"github.com/verba-lang/verba/internal/source"
 )
 
 const Version = "0.1.0"
@@ -114,16 +115,20 @@ func (c *CLI) format(args []string) int {
 	}
 	changed := 0
 	for _, path := range paths {
-		source, err := os.ReadFile(path)
+		fileSource, sourceDiagnostics, err := source.Load(path)
 		if err != nil {
 			return c.failure(err)
 		}
-		formatted := verbaformat.Source(source)
+		if c.printDiagnostics(sourceDiagnostics) {
+			return 1
+		}
+		content := fileSource.Bytes()
+		formatted := verbaformat.Source(content)
 		if *stdout {
 			_, _ = c.Stdout.Write(formatted)
 			continue
 		}
-		if bytes.Equal(source, formatted) {
+		if bytes.Equal(content, formatted) {
 			continue
 		}
 		changed++
@@ -176,10 +181,7 @@ func (c *CLI) build(args []string) int {
 	}
 	target := *output
 	if target == "" {
-		name := program.Files[0].Module
-		if name == "" {
-			name = "verba-program"
-		}
+		name := program.Name()
 		if runtime.GOOS == "windows" {
 			name += ".exe"
 		}

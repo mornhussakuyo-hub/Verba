@@ -7,31 +7,41 @@ import (
 
 	"github.com/verba-lang/verba/internal/ast"
 	"github.com/verba-lang/verba/internal/diagnostic"
+	"github.com/verba-lang/verba/internal/source"
 )
 
 type sourceLine struct {
 	number int
+	offset int
 	raw    string
 	text   string
 }
 
 type parser struct {
 	path        string
+	source      *source.File
 	lines       []sourceLine
 	index       int
 	diagnostics []diagnostic.Diagnostic
 }
 
-func Parse(path string, source []byte) (*ast.File, []diagnostic.Diagnostic) {
-	text := strings.ReplaceAll(string(source), "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
-	rawLines := strings.Split(text, "\n")
-	p := &parser{path: path}
-	for i, raw := range rawLines {
-		p.lines = append(p.lines, sourceLine{number: i + 1, raw: raw, text: strings.TrimSpace(raw)})
+func Parse(path string, content []byte) (*ast.File, []diagnostic.Diagnostic) {
+	file, sourceDiagnostics := source.New(path, content)
+	if diagnostic.HasErrors(sourceDiagnostics) {
+		return &ast.File{Path: path}, sourceDiagnostics
 	}
-	file := p.parseFile()
-	return file, p.diagnostics
+	parsed, diagnostics := ParseFile(file)
+	return parsed, append(sourceDiagnostics, diagnostics...)
+}
+
+func ParseFile(file *source.File) (*ast.File, []diagnostic.Diagnostic) {
+	p := &parser{path: file.Path, source: file}
+	for _, line := range file.Lines() {
+		raw := file.LineText(line)
+		p.lines = append(p.lines, sourceLine{number: line.Number, offset: line.Start, raw: raw, text: strings.TrimSpace(raw)})
+	}
+	parsed := p.parseFile()
+	return parsed, p.diagnostics
 }
 
 func (p *parser) parseFile() *ast.File {
@@ -589,11 +599,13 @@ func (p *parser) done() bool          { return p.index >= len(p.lines) }
 
 func (p *parser) position() ast.Position {
 	if p.done() {
-		return ast.Position{File: p.path, Line: max(1, len(p.lines)), Column: 1}
+		location := p.source.Position(p.source.Len())
+		return ast.Position{File: p.path, Offset: location.Offset, Line: location.Line, Column: location.Column}
 	}
 	line := p.current()
-	column := len(line.raw) - len(strings.TrimLeft(line.raw, " \t")) + 1
-	return ast.Position{File: p.path, Line: line.number, Column: column}
+	indent := len(line.raw) - len(strings.TrimLeft(line.raw, " \t"))
+	location := p.source.Position(line.offset + indent)
+	return ast.Position{File: p.path, Offset: location.Offset, Line: line.number, Column: location.Column}
 }
 
 func (p *parser) error(pos ast.Position, code, message, hint string) {

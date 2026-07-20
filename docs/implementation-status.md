@@ -12,7 +12,7 @@ The current work focuses on a typed semantic pipeline before expanding the runti
 
 | Stage | Status | Remaining work |
 | --- | --- | --- |
-| Source manager | Partial | UTF-8 validation, source spans, line maps, imported module sources |
+| Source manager | Partial | UTF-8/BOM validation, stable file IDs, byte offsets, and Unicode line maps work; full spans and imported module sources remain |
 | Region scanner | Partial | Dedicated core/literal/island regions and byte-accurate island spans |
 | Core lexer | Missing | Tokens, keyword classification, numeric validation, recovery |
 | Parser | Partial | Typed route inputs, richer literals, and broader recovery coverage |
@@ -28,7 +28,7 @@ The current work focuses on a typed semantic pipeline before expanding the runti
 
 | Area | Implemented | Remaining work |
 | --- | --- | --- |
-| Declarations | module, use, record, enum, function, route, embed | package manifest and imported modules |
+| Declarations | module, use, record, enum, function, route, embed, strict TOML project manifest | imported source modules and lock files |
 | Statements | let, var, set, call, if/else, match/case, for, while, return, respond, transaction parsing | executable transactions |
 | Types | scalar names, optional, list, map, result, records, enums | strict numeric constants, decimal runtime, conversion APIs |
 | Expressions | atoms, controlled text/url/path, call, get, equality | complete builtin set and typed conversion functions |
@@ -41,7 +41,7 @@ The current work focuses on a typed semantic pipeline before expanding the runti
 
 ## Documentation
 
-The repository has a design document, README, and a seven-chapter Chinese beginner tutorial under `docs/tutorial/`. Five runnable projects under `learn/` are checked and built independently by CI.
+The repository has a design document, README, and an eight-chapter Chinese beginner tutorial under `docs/tutorial/`. Five runnable projects under `learn/` are checked and built independently by CI.
 
 ## Release gates
 

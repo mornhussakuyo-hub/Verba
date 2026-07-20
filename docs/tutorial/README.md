@@ -11,6 +11,7 @@
 5. [HTTP 服务](05-http-service.md)：路径参数、请求数据和响应。
 6. [语法岛](06-syntax-islands.md)：JSON、Regex、HTML、Text 与 SQL。
 7. [工具链与排错](07-tooling.md)：check、fmt、build、run 和诊断。
+8. [项目清单](08-project-manifest.md)：项目身份、构建目标、数据库和依赖元数据。
 
 ## 约定
 
