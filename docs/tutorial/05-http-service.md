@@ -28,6 +28,25 @@ end
 
 JSON 请求体可以解码到 record。解码属于可失败操作，因此与 `try` 和 `result` 配合使用。
 
+```verba
+record uuid_request
+begin
+    field id string
+end
+
+route validate_uuid
+method post
+path /validate-uuid
+begin
+    let payload to be try call json_decode uuid_request request_body
+    let raw_id to be get payload id
+    let parsed_id to be try call parse_uuid raw_id
+    respond json 200 parsed_id
+end
+```
+
+路由是 HTTP 错误边界。`try` 遇到无效 JSON 或 UUID 时会停止当前路由并返回 500；后续里程碑会加入可声明的应用错误到 HTTP 状态映射。
+
 ## 响应
 
 ```verba
@@ -54,6 +73,7 @@ respond empty 204
 ```powershell
 curl http://127.0.0.1:8080/health
 curl http://127.0.0.1:8080/hello/Alice
+curl -Method Post http://127.0.0.1:8080/validate-uuid -ContentType application/json -Body '{"id":"550e8400-e29b-41d4-a716-446655440000"}'
 ```
 
 下一章：[语法岛](06-syntax-islands.md)。

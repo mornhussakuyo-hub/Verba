@@ -2,6 +2,11 @@ module web_service
 
 use http
 
+record uuid_request
+begin
+    field id string
+end
+
 route health
 method get
 path /health
@@ -15,4 +20,14 @@ path /hello/{name}
 begin
     let normalized to be call lowercase name
     respond json 200 normalized
+end
+
+route validate_uuid
+method post
+path /validate-uuid
+begin
+    let payload to be try call json_decode uuid_request request_body
+    let raw_id to be get payload id
+    let parsed_id to be try call parse_uuid raw_id
+    respond json 200 parsed_id
 end

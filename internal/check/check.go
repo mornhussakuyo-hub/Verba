@@ -59,13 +59,14 @@ var builtins = map[string]builtin{
 }
 
 type Checker struct {
-	files       []*ast.File
-	decls       map[string]ast.Decl
-	functions   map[string]*ast.Function
-	records     map[string]*ast.Record
-	embeds      map[string]*ast.Embed
-	enumCases   map[string]ast.Type
-	diagnostics []diagnostic.Diagnostic
+	files         []*ast.File
+	decls         map[string]ast.Decl
+	functions     map[string]*ast.Function
+	records       map[string]*ast.Record
+	embeds        map[string]*ast.Embed
+	enumCases     map[string]ast.Type
+	routeBoundary bool
+	diagnostics   []diagnostic.Diagnostic
 }
 
 func Files(files []*ast.File) []diagnostic.Diagnostic {
@@ -189,7 +190,10 @@ func (c *Checker) validateRoute(route *ast.Route) {
 	for _, parameter := range routeParameters(route.Path) {
 		local[parameter] = binding{typeValue: stringType}
 	}
-	c.validateStatements(route.Body, local, true, route.Output)
+	previousBoundary := c.routeBoundary
+	c.routeBoundary = true
+	c.validateStatements(route.Body, local, true, nil)
+	c.routeBoundary = previousBoundary
 }
 
 func (c *Checker) validateEmbed(embed *ast.Embed) {
@@ -675,6 +679,9 @@ func (c *Checker) applyTry(expr ast.Expr, result ast.Type, expected *ast.Type) a
 	if result.Name != "result" || len(result.Args) != 2 {
 		c.error(expr.Pos, "VRB1435", fmt.Sprintf("try requires result T E but call %s returns %s", expr.Value, result.String()), "remove try or call a function that returns result")
 		return unknownType
+	}
+	if c.routeBoundary {
+		return result.Args[0]
 	}
 	if expected == nil || expected.Name != "result" || len(expected.Args) != 2 {
 		c.error(expr.Pos, "VRB1436", "try can only be used in a function or route returning result T E", "declare a compatible result output type or handle the error explicitly")

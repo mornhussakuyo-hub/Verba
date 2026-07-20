@@ -32,8 +32,8 @@ The current work focuses on a typed semantic pipeline before expanding the runti
 | Statements | let, var, set, call, if/else, match/case, for, while, return, respond, transaction parsing | executable transactions |
 | Types | scalar names, optional, list, map, result, records, enums | strict numeric constants, decimal runtime, conversion APIs |
 | Expressions | atoms, controlled text/url/path, call, get, equality | complete builtin set and typed conversion functions |
-| HTTP | generated `net/http` routes, path values, body/headers/context bindings | typed query/header/body decoding and error mapping |
-| JSON | island syntax validation, generated encoding | strict decoding errors, schema options, typed constants |
+| HTTP | generated `net/http` routes, path values, body/headers/context bindings, route error boundary | typed query/header decoding and declared application-error mapping |
+| JSON | island syntax validation, typed `result` decoding errors, generated encoding | schema options and typed constants |
 | SQL | named parameter extraction and exact binding checks | dialect parser, schema snapshot, drivers, rows, transactions |
 | HTML | raw island accepted | parser, slots, escaping, trusted HTML, renderer |
 | Regex | raw island accepted, runtime matching helper | compile-time regex validation and precompiled patterns |

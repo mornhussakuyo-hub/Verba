@@ -127,3 +127,38 @@ end
 		t.Fatalf("generated match does not use switch:\n%s", generated)
 	}
 }
+
+func TestEmitFallibleJSONAndUUIDRuntime(t *testing.T) {
+	source := []byte(`module example
+record request
+begin
+    field id string
+end
+route validate
+method post
+path /validate
+begin
+    let payload to be try call json_decode request request_body
+    let raw_id to be get payload id
+    let parsed_id to be try call parse_uuid raw_id
+    respond json 200 parsed_id
+end
+`)
+	file, parseDiagnostics := verbaParser.Parse("runtime.vrb", source)
+	if len(parseDiagnostics) != 0 {
+		t.Fatalf("parse diagnostics: %#v", parseDiagnostics)
+	}
+	generated, diagnostics := Files([]*ast.File{file})
+	if len(diagnostics) != 0 {
+		t.Fatalf("emit diagnostics: %#v", diagnostics)
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "main.go", generated, parser.AllErrors); err != nil {
+		t.Fatalf("generated Go is invalid: %v\n%s", err, generated)
+	}
+	text := string(generated)
+	for _, expected := range []string{"func decodeJSON[T any](data []byte) Result[T, string]", "func parseUUID", "decodeJSON[Request](request_body)", "parseUUID(raw_id)"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("generated source does not contain %q:\n%s", expected, text)
+		}
+	}
+}

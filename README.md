@@ -54,10 +54,12 @@ verba help
 前端支持：
 
 - `module`、`use`、`record`、`enum`、`function`、`route` 和 `embed`。
-- `let`、`var`、`set`、`call`、`if` / `else`、`for`、`while`、`return`、`respond` 和 `transaction` 的解析。
+- `let`、`var`、`set`、`call`、`if` / `else`、`match` / `case`、`for`、`while`、`return`、`respond` 和 `transaction` 的解析。
 - 基础类型以及 `optional`、`list`、`map`、`result` 类型构造。
 - `get`、`is` / `is not`、`try call` 和命名参数块。
-- JSON 语法校验，以及 SQL 命名参数和 `with` 绑定的一致性检查。
+- JSON 与正则语法校验、HTML/text 模板槽位检查，以及 SQL 命名参数和 `with` 绑定的一致性检查。
+- 类型化作用域、函数参数、字段路径、条件、返回路径、optional 和 result / try 检查。
+- JSON 解码与 UUID 解析使用真实 `result` 错误路径；HTML 模板默认转义，正则资源预编译。
 - JSON、文本和空 HTTP 响应的 Go 代码生成。
 
 0.1.0 的 Go 后端暂不生成数据库执行代码。SQL 岛及绑定可以通过 `verba check` 验证；包含 `sql_exec`、`sql_one`、`sql_optional`、`sql_many` 或 `transaction` 的程序在 `build` 阶段会收到明确诊断。这样不会在未选择数据库驱动和连接模型时生成行为不可靠的程序。

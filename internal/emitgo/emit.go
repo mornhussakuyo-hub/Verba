@@ -121,7 +121,7 @@ func (e *emitter) emitProgram() {
 	e.line(0, "package main")
 	e.line(0, "")
 	e.line(0, `import (`)
-	for _, item := range []string{"encoding/json", "fmt", "html", "io", "net/http", "os", "regexp", "strings", "time"} {
+	for _, item := range []string{"crypto/rand", "encoding/json", "fmt", "html", "io", "net/http", "os", "regexp", "strings", "time"} {
 		e.line(1, "%s", strconv.Quote(item))
 	}
 	e.line(0, `)`)
@@ -133,6 +133,7 @@ func (e *emitter) emitProgram() {
 	e.line(0, "var _ = time.Now")
 	e.line(0, "")
 	e.line(0, `var templateSlotPattern = regexp.MustCompile(%s)`, strconv.Quote(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`))
+	e.line(0, `var uuidPattern = regexp.MustCompile(%s)`, strconv.Quote(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`))
 	e.line(0, "")
 	e.line(0, "func renderTemplate(source string, values map[string]string, escapeHTML bool) string {")
 	e.line(1, "return templateSlotPattern.ReplaceAllStringFunc(source, func(slot string) string {")
@@ -148,14 +149,29 @@ func (e *emitter) emitProgram() {
 	e.line(1, "Err *E")
 	e.line(0, "}")
 	e.line(0, "")
-	e.line(0, "func decodeJSON[T any](data []byte) T {")
+	e.line(0, "func decodeJSON[T any](data []byte) Result[T, string] {")
 	e.line(1, "var value T")
-	e.line(1, "_ = json.Unmarshal(data, &value)")
-	e.line(1, "return value")
+	e.line(1, "if err := json.Unmarshal(data, &value); err != nil {")
+	e.line(2, "message := err.Error()")
+	e.line(2, "return Result[T, string]{Err: &message}")
+	e.line(1, "}")
+	e.line(1, "return Result[T, string]{Value: value}")
 	e.line(0, "}")
 	e.line(0, "")
 	e.line(0, "func newUUID() string {")
-	e.line(1, `return fmt.Sprintf("%%x", time.Now().UnixNano())`)
+	e.line(1, "var value [16]byte")
+	e.line(1, "if _, err := rand.Read(value[:]); err != nil { panic(err) }")
+	e.line(1, "value[6] = (value[6] & 0x0f) | 0x40")
+	e.line(1, "value[8] = (value[8] & 0x3f) | 0x80")
+	e.line(1, `return fmt.Sprintf("%%x-%%x-%%x-%%x-%%x", value[0:4], value[4:6], value[6:8], value[8:10], value[10:16])`)
+	e.line(0, "}")
+	e.line(0, "")
+	e.line(0, "func parseUUID(input string) Result[string, string] {")
+	e.line(1, "if !uuidPattern.MatchString(input) {")
+	e.line(2, `message := "invalid UUID"`)
+	e.line(2, "return Result[string, string]{Err: &message}")
+	e.line(1, "}")
+	e.line(1, "return Result[string, string]{Value: strings.ToLower(input)}")
 	e.line(0, "}")
 	e.line(0, "")
 
@@ -455,6 +471,8 @@ func (e *emitter) call(expr ast.Expr) string {
 		return "strings.Join([]string{" + strings.Join(args, ", ") + "}, \"\")"
 	case "new_uuid":
 		return "newUUID()"
+	case "parse_uuid":
+		return "parseUUID(" + args[0] + ")"
 	case "regex_match":
 		if len(expr.Args) == 2 {
 			if embed := e.embeds[expr.Args[0].Value]; embed != nil && embed.Kind == "regex" {

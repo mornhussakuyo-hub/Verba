@@ -231,6 +231,27 @@ end
 	}
 }
 
+func TestRouteIsTryErrorBoundary(t *testing.T) {
+	source := []byte(`module example
+record request
+begin
+    field id string
+end
+route validate
+method post
+path /validate
+begin
+    let payload to be try call json_decode request request_body
+    let raw_id to be get payload id
+    let parsed_id to be try call parse_uuid raw_id
+    respond json 200 parsed_id
+end
+`)
+	if diagnostics := checkSource(t, source); len(diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", diagnostics)
+	}
+}
+
 func checkSource(t *testing.T, source []byte) []diagnostic.Diagnostic {
 	t.Helper()
 	file, parseDiagnostics := parser.Parse("test.vrb", source)
