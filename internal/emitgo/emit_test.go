@@ -162,3 +162,28 @@ end
 		}
 	}
 }
+
+func TestMinimalProgramOmitsUnusedRuntime(t *testing.T) {
+	source := []byte(`module minimal
+route health
+method get
+path /health
+begin
+    respond text 200 ready
+end
+`)
+	file, parseDiagnostics := verbaParser.Parse("minimal.vrb", source)
+	if len(parseDiagnostics) != 0 {
+		t.Fatalf("parse diagnostics: %#v", parseDiagnostics)
+	}
+	generated, diagnostics := Files([]*ast.File{file})
+	if len(diagnostics) != 0 {
+		t.Fatalf("emit diagnostics: %#v", diagnostics)
+	}
+	text := string(generated)
+	for _, unused := range []string{`"crypto/rand"`, `"encoding/json"`, `"html"`, `"regexp"`, `"strings"`, `"time"`, "type Result[", "renderTemplate", "decodeJSON", "parseUUID"} {
+		if strings.Contains(text, unused) {
+			t.Fatalf("minimal generated source unexpectedly contains %q:\n%s", unused, text)
+		}
+	}
+}

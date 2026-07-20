@@ -36,13 +36,26 @@ func (d Diagnostic) String() string {
 
 func Sort(items []Diagnostic) {
 	sort.SliceStable(items, func(i, j int) bool {
-		if items[i].File != items[j].File {
-			return items[i].File < items[j].File
+		left, right := items[i], items[j]
+		if left.File != right.File {
+			return left.File < right.File
 		}
-		if items[i].Line != items[j].Line {
-			return items[i].Line < items[j].Line
+		if left.Line != right.Line {
+			return left.Line < right.Line
 		}
-		return items[i].Column < items[j].Column
+		if left.Column != right.Column {
+			return left.Column < right.Column
+		}
+		if left.Code != right.Code {
+			return left.Code < right.Code
+		}
+		if left.Message != right.Message {
+			return left.Message < right.Message
+		}
+		if left.Hint != right.Hint {
+			return left.Hint < right.Hint
+		}
+		return left.Severity < right.Severity
 	})
 }
 

@@ -258,7 +258,7 @@ func (c *CLI) compileGo(source []byte, target string) error {
 	if err != nil {
 		return err
 	}
-	command := exec.Command("go", "build", "-trimpath", "-o", absolute, mainPath)
+	command := exec.Command("go", "build", "-trimpath", "-buildvcs=false", "-ldflags=-s -w", "-o", absolute, mainPath)
 	command.Stdout, command.Stderr = c.Stdout, c.Stderr
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("Go backend failed: %w", err)

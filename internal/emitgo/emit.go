@@ -19,7 +19,21 @@ type emitter struct {
 	enumCases   map[string]string
 	functions   map[string]*ast.Function
 	embeds      map[string]*ast.Embed
+	features    featureSet
 	temp        int
+}
+
+type featureSet struct {
+	json       bool
+	jsonDecode bool
+	regex      bool
+	template   bool
+	html       bool
+	strings    bool
+	time       bool
+	randomUUID bool
+	parseUUID  bool
+	result     bool
 }
 
 func Files(files []*ast.File) ([]byte, []diagnostic.Diagnostic) {
@@ -38,6 +52,7 @@ func Files(files []*ast.File) ([]byte, []diagnostic.Diagnostic) {
 			}
 		}
 	}
+	e.scanFeatures()
 	e.validateSupported()
 	if diagnostic.HasErrors(e.diagnostics) {
 		return nil, e.diagnostics
@@ -116,64 +131,221 @@ func (e *emitter) validateExpr(expr ast.Expr) {
 	}
 }
 
+func (e *emitter) scanFeatures() {
+	for _, file := range e.files {
+		for _, decl := range file.Decls {
+			switch value := decl.(type) {
+			case *ast.Record:
+				for _, field := range value.Fields {
+					e.scanType(field.Type)
+				}
+			case *ast.Function:
+				for _, input := range value.Inputs {
+					e.scanType(input.Type)
+				}
+				if value.Output != nil {
+					e.scanType(*value.Output)
+				}
+				e.scanStatements(value.Body)
+			case *ast.Route:
+				if value.Output != nil {
+					e.scanType(*value.Output)
+				}
+				e.scanStatements(value.Body)
+			case *ast.Embed:
+				if value.Kind == "regex" {
+					e.features.regex = true
+				}
+			}
+		}
+	}
+}
+
+func (e *emitter) scanType(value ast.Type) {
+	switch value.Name {
+	case "result":
+		e.features.result = true
+	case "time", "duration":
+		e.features.time = true
+	}
+	for _, argument := range value.Args {
+		e.scanType(argument)
+	}
+}
+
+func (e *emitter) scanStatements(statements []ast.Stmt) {
+	for _, statement := range statements {
+		switch value := statement.(type) {
+		case *ast.LetStmt:
+			e.scanExpr(value.Value)
+		case *ast.SetStmt:
+			e.scanExpr(value.Value)
+		case *ast.ExprStmt:
+			e.scanExpr(value.Value)
+		case *ast.ReturnStmt:
+			if value.Value != nil {
+				e.scanExpr(*value.Value)
+			}
+		case *ast.RespondStmt:
+			if value.Format == "json" {
+				e.features.json = true
+			}
+			if value.Value != nil {
+				e.scanExpr(*value.Value)
+			}
+		case *ast.IfStmt:
+			e.scanExpr(value.Condition)
+			e.scanStatements(value.Then)
+			e.scanStatements(value.Else)
+		case *ast.ForStmt:
+			e.scanExpr(value.Iterable)
+			e.scanStatements(value.Body)
+		case *ast.WhileStmt:
+			e.scanExpr(value.Condition)
+			e.scanStatements(value.Body)
+		case *ast.MatchStmt:
+			e.scanExpr(value.Value)
+			for _, matchCase := range value.Cases {
+				e.scanExpr(matchCase.Pattern)
+				e.scanStatements(matchCase.Body)
+			}
+			e.scanStatements(value.Else)
+		case *ast.TransactionStmt:
+			e.scanStatements(value.Body)
+		}
+	}
+}
+
+func (e *emitter) scanExpr(expr ast.Expr) {
+	if expr.Try {
+		e.features.result = true
+	}
+	if expr.Kind == ast.ExprCall {
+		switch expr.Value {
+		case "trim", "lowercase", "uppercase", "contains", "starts_with", "concat":
+			e.features.strings = true
+		case "regex_match":
+			e.features.regex = true
+		case "json_decode":
+			e.features.json = true
+			e.features.jsonDecode = true
+			e.features.result = true
+		case "json_encode":
+			e.features.json = true
+		case "new_uuid":
+			e.features.randomUUID = true
+		case "parse_uuid":
+			e.features.parseUUID = true
+			e.features.regex = true
+			e.features.strings = true
+			e.features.result = true
+		case "render":
+			e.features.template = true
+			e.features.regex = true
+			e.features.html = true
+		case "ok", "error":
+			e.features.result = true
+		}
+	}
+	for _, argument := range expr.Args {
+		e.scanExpr(argument)
+	}
+	for _, argument := range expr.NamedArgs {
+		e.scanExpr(argument.Value)
+	}
+}
+
+func (e *emitter) emitRuntime() {
+	if e.features.template {
+		e.line(0, `var templateSlotPattern = regexp.MustCompile(%s)`, strconv.Quote(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`))
+	}
+	if e.features.parseUUID {
+		e.line(0, `var uuidPattern = regexp.MustCompile(%s)`, strconv.Quote(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`))
+	}
+	if e.features.template || e.features.parseUUID {
+		e.line(0, "")
+	}
+	if e.features.result {
+		e.line(0, "type Result[T any, E any] struct {")
+		e.line(1, "Value T")
+		e.line(1, "Err *E")
+		e.line(0, "}")
+		e.line(0, "")
+	}
+	if e.features.template {
+		e.line(0, "func renderTemplate(source string, values map[string]string, escapeHTML bool) string {")
+		e.line(1, "return templateSlotPattern.ReplaceAllStringFunc(source, func(slot string) string {")
+		e.line(2, `matches := templateSlotPattern.FindStringSubmatch(slot)`)
+		e.line(2, `value := values[matches[1]]`)
+		e.line(2, `if escapeHTML { return html.EscapeString(value) }`)
+		e.line(2, `return value`)
+		e.line(1, "})")
+		e.line(0, "}")
+		e.line(0, "")
+	}
+	if e.features.jsonDecode {
+		e.line(0, "func decodeJSON[T any](data []byte) Result[T, string] {")
+		e.line(1, "var value T")
+		e.line(1, "if err := json.Unmarshal(data, &value); err != nil {")
+		e.line(2, "message := err.Error()")
+		e.line(2, "return Result[T, string]{Err: &message}")
+		e.line(1, "}")
+		e.line(1, "return Result[T, string]{Value: value}")
+		e.line(0, "}")
+		e.line(0, "")
+	}
+	if e.features.randomUUID {
+		e.line(0, "func newUUID() string {")
+		e.line(1, "var value [16]byte")
+		e.line(1, "if _, err := rand.Read(value[:]); err != nil { panic(err) }")
+		e.line(1, "value[6] = (value[6] & 0x0f) | 0x40")
+		e.line(1, "value[8] = (value[8] & 0x3f) | 0x80")
+		e.line(1, `return fmt.Sprintf("%%x-%%x-%%x-%%x-%%x", value[0:4], value[4:6], value[6:8], value[8:10], value[10:16])`)
+		e.line(0, "}")
+		e.line(0, "")
+	}
+	if e.features.parseUUID {
+		e.line(0, "func parseUUID(input string) Result[string, string] {")
+		e.line(1, "if !uuidPattern.MatchString(input) {")
+		e.line(2, `message := "invalid UUID"`)
+		e.line(2, "return Result[string, string]{Err: &message}")
+		e.line(1, "}")
+		e.line(1, "return Result[string, string]{Value: strings.ToLower(input)}")
+		e.line(0, "}")
+		e.line(0, "")
+	}
+}
+
 func (e *emitter) emitProgram() {
 	e.line(0, "// Code generated by verba 0.1.0. DO NOT EDIT.")
 	e.line(0, "package main")
 	e.line(0, "")
 	e.line(0, `import (`)
-	for _, item := range []string{"crypto/rand", "encoding/json", "fmt", "html", "io", "net/http", "os", "regexp", "strings", "time"} {
+	imports := []string{"fmt", "io", "net/http", "os"}
+	if e.features.randomUUID {
+		imports = append(imports, "crypto/rand")
+	}
+	if e.features.json {
+		imports = append(imports, "encoding/json")
+	}
+	if e.features.html {
+		imports = append(imports, "html")
+	}
+	if e.features.regex {
+		imports = append(imports, "regexp")
+	}
+	if e.features.strings {
+		imports = append(imports, "strings")
+	}
+	if e.features.time {
+		imports = append(imports, "time")
+	}
+	for _, item := range imports {
 		e.line(1, "%s", strconv.Quote(item))
 	}
 	e.line(0, `)`)
 	e.line(0, "")
-	e.line(0, "var _ = fmt.Sprint")
-	e.line(0, "var _ = io.ReadAll")
-	e.line(0, "var _ = regexp.MatchString")
-	e.line(0, "var _ = strings.TrimSpace")
-	e.line(0, "var _ = time.Now")
-	e.line(0, "")
-	e.line(0, `var templateSlotPattern = regexp.MustCompile(%s)`, strconv.Quote(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`))
-	e.line(0, `var uuidPattern = regexp.MustCompile(%s)`, strconv.Quote(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`))
-	e.line(0, "")
-	e.line(0, "func renderTemplate(source string, values map[string]string, escapeHTML bool) string {")
-	e.line(1, "return templateSlotPattern.ReplaceAllStringFunc(source, func(slot string) string {")
-	e.line(2, `matches := templateSlotPattern.FindStringSubmatch(slot)`)
-	e.line(2, `value := values[matches[1]]`)
-	e.line(2, `if escapeHTML { return html.EscapeString(value) }`)
-	e.line(2, `return value`)
-	e.line(1, "})")
-	e.line(0, "}")
-	e.line(0, "")
-	e.line(0, "type Result[T any, E any] struct {")
-	e.line(1, "Value T")
-	e.line(1, "Err *E")
-	e.line(0, "}")
-	e.line(0, "")
-	e.line(0, "func decodeJSON[T any](data []byte) Result[T, string] {")
-	e.line(1, "var value T")
-	e.line(1, "if err := json.Unmarshal(data, &value); err != nil {")
-	e.line(2, "message := err.Error()")
-	e.line(2, "return Result[T, string]{Err: &message}")
-	e.line(1, "}")
-	e.line(1, "return Result[T, string]{Value: value}")
-	e.line(0, "}")
-	e.line(0, "")
-	e.line(0, "func newUUID() string {")
-	e.line(1, "var value [16]byte")
-	e.line(1, "if _, err := rand.Read(value[:]); err != nil { panic(err) }")
-	e.line(1, "value[6] = (value[6] & 0x0f) | 0x40")
-	e.line(1, "value[8] = (value[8] & 0x3f) | 0x80")
-	e.line(1, `return fmt.Sprintf("%%x-%%x-%%x-%%x-%%x", value[0:4], value[4:6], value[6:8], value[8:10], value[10:16])`)
-	e.line(0, "}")
-	e.line(0, "")
-	e.line(0, "func parseUUID(input string) Result[string, string] {")
-	e.line(1, "if !uuidPattern.MatchString(input) {")
-	e.line(2, `message := "invalid UUID"`)
-	e.line(2, "return Result[string, string]{Err: &message}")
-	e.line(1, "}")
-	e.line(1, "return Result[string, string]{Value: strings.ToLower(input)}")
-	e.line(0, "}")
-	e.line(0, "")
+	e.emitRuntime()
 
 	for _, file := range e.files {
 		for _, decl := range file.Decls {
